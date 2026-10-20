@@ -1,0 +1,6 @@
+.build/
+.swiftpm/
+DerivedData/
+LaunchGrid.app/
+*.xcuserstate
+.DS_Store
