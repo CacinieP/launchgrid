@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import SystemConfiguration
 
 /// 周期（今日 / 本周 / 本月）
 enum TrafficPeriod: String, CaseIterable, Identifiable {
@@ -92,6 +93,8 @@ final class NetworkMonitor: ObservableObject {
     @Published private(set) var samples: [TrafficSample] = []
     @Published private(set) var updatedAt: Date?
     @Published private(set) var lastError: String?
+    /// 系统路由视角的连通性（只读标志位，不发包），状态栏绿点用
+    @Published private(set) var isReachable = true
 
     /// 历史采样间隔
     private let historyInterval: TimeInterval = 5
@@ -175,12 +178,14 @@ final class NetworkMonitor: ObservableObject {
                         + " up=" + String(Int(rate.up)))
             let traffic = NetworkMonitor.readProcessTraffic()
             let conns = NetworkMonitor.readConnections()
+            let online = NetworkMonitor.readReachability()
 
             DispatchQueue.main.async {
                 self.downloadBPS = rate.down
                 self.uploadBPS = rate.up
                 self.processTraffic = traffic
                 self.connections = conns
+                self.isReachable = online
                 self.updatedAt = Date()
                 self.lastError = nil
                 self.isRefreshing = false
@@ -532,6 +537,23 @@ final class NetworkMonitor: ObservableObject {
             names[pid] = (path as NSString).lastPathComponent
         }
         return names
+    }
+
+    /// 读系统路由表对 8.8.8.8 的可达标志位（查询本地状态，不产生网络流量）
+    private static func readReachability() -> Bool {
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        guard inet_pton(AF_INET, "8.8.8.8", &address.sin_addr) == 1 else { return true }
+        var addr = sockaddr()
+        withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { rebound in
+                addr = rebound.pointee
+            }
+        }
+        guard let reachability = SCNetworkReachabilityCreateWithAddress(kCFAllocatorDefault, &addr) else { return true }
+        var flags = SCNetworkReachabilityFlags()
+        guard SCNetworkReachabilityGetFlags(reachability, &flags) else { return true }
+        return flags.contains(.reachable) && !flags.contains(.interventionRequired)
     }
 
     // MARK: - 历史落盘

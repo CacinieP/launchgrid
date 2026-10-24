@@ -93,9 +93,9 @@ struct NetworkContentView: View {
         HStack(spacing: 18) {
             HStack(spacing: 6) {
                 Circle()
-                    .fill(Color.green)
+                    .fill(monitor.isReachable ? Color.green : Color.red)
                     .frame(width: 8, height: 8)
-                Text("网络正常")
+                Text(monitor.isReachable ? "网络正常" : "网络不可达")
                     .font(.callout)
             }
 
