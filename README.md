@@ -1,6 +1,16 @@
 # LaunchGrid
 
-macOS 26/27 启动台（Launchpad）移除后的自建替代：一个菜单栏常驻小工具，四个浮层面板共用一次唤出动作。
+<div align="center">
+  <img src="docs/screenshots/apps.png" width="820" alt="LaunchGrid 应用网格（全屏浮层）"/>
+  <p><sub>全屏应用网格 · 四面板共用 F4 系热键 · 更多截图见下文</sub></p>
+</div>
+
+[![CI](https://github.com/CacinieP/launchgrid/actions/workflows/ci.yml/badge.svg)](https://github.com/CacinieP/launchgrid/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/CacinieP/launchgrid)](https://github.com/CacinieP/launchgrid/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-black)](https://github.com/CacinieP/launchgrid)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+macOS 26/27 启动台（Launchpad）移除后的自建替代：一个菜单栏常驻小工具，四个浮层面板共用一次唤出动作。**[⬇ 下载最新版 DMG](https://github.com/CacinieP/launchgrid/releases/latest)**（Developer ID 签名 + Apple 公证）
 
 | 面板 | 热键 | 做什么 |
 |---|---|---|
@@ -10,6 +20,16 @@ macOS 26/27 启动台（Launchpad）移除后的自建替代：一个菜单栏�
 | 网络面板 | `⇧⌥F4` | 实时速率、按进程流量归因、连接明细、DNS 管理、断网诊断与急救 |
 
 无第三方依赖，单个 Swift Package，无 Dock 图标（LSUIElement），全局热键走 Carbon，**不需要辅助功能权限**（仅"直接回贴"需要）。
+
+## 截图
+
+| 进程管理（⌥F4） | 剪贴板历史（⇧F4） |
+|---|---|
+| <img src="docs/screenshots/processes.png" width="420"/> | <img src="docs/screenshots/clipboard.png" width="420"/> |
+
+| 网络面板 · 实时流量（⇧⌥F4） | 网络面板 · 断网诊断 |
+|---|---|
+| <img src="docs/screenshots/network-traffic.png" width="420"/> | <img src="docs/screenshots/network-diagnostics.png" width="420"/> |
 
 ## 两种呈现方式
 
