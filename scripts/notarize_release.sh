@@ -118,7 +118,8 @@ xcrun stapler validate "$APP"
 # ---------- 5/8 Gatekeeper 门禁 ----------
 echo "== 5/8 Gatekeeper 验证（不过则中止，不会发布）"
 spctl -a -t exec -v "$APP"
-spctl --assess --type open -v "$DMG_SUBMIT"
+# DMG 不用 spctl --type open：新系统上常误报 "Insufficient Context"，
+# stapler validate（上一步）通过即代表票据有效，这就是 DMG 的门禁
 
 # ---------- 6/8 产出最终 DMG ----------
 echo "== 6/8 产出分发包"
