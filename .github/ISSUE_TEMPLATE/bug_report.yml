@@ -1,0 +1,22 @@
+name: Bug report / 问题反馈
+description: Report a reproducible problem without private history or credentials.
+body:
+  - type: input
+    id: version
+    attributes:
+      label: LaunchGrid / macOS / architecture
+      placeholder: 0.4.2 / macOS 26.x / Apple Silicon or Intel
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps / 复现步骤
+      description: Include expected and actual behavior. Do not include clipboard contents, secrets or full network logs.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Extra context / 补充信息
+      description: Relevant shortcut, module state, permissions or a redacted screenshot.
