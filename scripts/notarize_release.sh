@@ -40,6 +40,12 @@ if [ "$MODE" = "apple_id" ]; then
   : "${APPLE_ID:?apple_id 模式必须提供 APPLE_ID（Apple ID 邮箱）}"
 fi
 
+# 钥匙串里已有可用凭据时，P8 / Apple ID 都不再需要
+PROFILE_OK=false
+if xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
+  PROFILE_OK=true
+fi
+
 # ---------- 0/8 前置检查 ----------
 echo "== 0/8 前置检查（认证模式: $MODE）"
 [ -d "$APP" ] || { echo "FATAL: $APP 不存在（先安装）"; exit 1; }
@@ -58,14 +64,14 @@ codesign -dv "$APP" 2>&1 | grep "TeamIdentifier=$TEAM_ID" >/dev/null \
 codesign -dv --verbose=4 "$APP" 2>&1 | grep "flags=0x10000(runtime)" >/dev/null \
   || { echo "FATAL: app 未启用 hardened runtime（codesign 缺 --options runtime）"; exit 1; }
 
-if [ "$MODE" = "asc_key" ]; then
+if [ "$MODE" = "asc_key" ] && ! $PROFILE_OK; then
   P8_PATH="${P8_PATH:?必须提供 .p8 路径}"
   KEY_ID="${KEY_ID:?必须提供 Key ID}"
   [ -f "$P8_PATH" ] || { echo "FATAL: .p8 不存在: $P8_PATH"; exit 1; }
   chmod 600 "$P8_PATH"
   echo "OK: app 签名有效 / hardened runtime 就绪 / .p8 权限 600"
 else
-  echo "OK: app 签名有效 / hardened runtime 就绪"
+  echo "OK: app 签名有效 / hardened runtime 就绪（凭据: $([ "$PROFILE_OK" = true ] && echo 钥匙串复用 || echo 运行时提供)）"
 fi
 
 # ---------- 1/8 打 DMG ----------
@@ -80,7 +86,7 @@ rm -rf "$STAGE"
 echo "OK: $DMG_SUBMIT ($(du -h "$DMG_SUBMIT" | awk '{print $1}'))"
 
 # ---------- 2/8 凭据 ----------
-if xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
+if $PROFILE_OK; then
   echo "== 2/8 复用钥匙串凭据 $PROFILE"
 else
   echo "== 2/8 存储 notarytool 凭据并验证"
