@@ -24,7 +24,8 @@ APP_NAME="LaunchGrid"
 APP="/Applications/${APP_NAME}.app"
 REPO="CacinieP/launchgrid"
 PROFILE="launchgrid-notary"
-APPLE_ID="${APPLE_ID:-cacinie@163.com}"
+# 个人信息不入库：apple_id 模式下 APPLE_ID 必须由环境变量提供
+APPLE_ID="${APPLE_ID:-}"
 TEAM_ID="${TEAM_ID:-5CFSU44B7Q}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +35,9 @@ export PATH=/opt/homebrew/bin:$PATH
 
 MODE="asc_key"
 [ -n "${APPLE_APP_PASSWORD:-}" ] && MODE="apple_id"
+if [ "$MODE" = "apple_id" ]; then
+  : "${APPLE_ID:?apple_id 模式必须提供 APPLE_ID（Apple ID 邮箱）}"
+fi
 
 # ---------- 0/8 前置检查 ----------
 echo "== 0/8 前置检查（认证模式: $MODE）"
@@ -104,11 +108,14 @@ ditto -c -k --keepParent "$APP" "$ZIP_FINAL"
 # ---------- 7/8 Release notes ----------
 NOTES="$(mktemp)"
 cat > "$NOTES" <<EOF
-macOS 26/27 启动台（Launchpad）移除后的自建替代：按 F4 或点菜单栏网格图标唤出全屏 App 网格，支持搜索、分页、点击启动。
+macOS 26/27 启动台（Launchpad）移除后的自建替代：菜单栏常驻，四个浮层面板共用一次唤出。
 
+- 应用网格（F4）：全屏 App 网格，搜索、分页、点击启动
+- 进程管理（⌥F4）：全量进程 CPU / 内存占用，终止与强杀
+- 剪贴板历史（⇧F4）：跨应用历史，搜索后双击直接回贴
+- 网络面板（⇧⌥F4）：实时速率、进程流量归因、连接明细、DNS 管理与断网急救
 - 要求：macOS 26 (Tahoe) 或更高
 - 安装：解压后拖入 /Applications，直接打开即可（Developer ID 签名 + Apple 已公证）
-- 用法：F4 唤出/收起 · Esc 关闭 · 顶部搜索框过滤 · 点击图标启动 · 菜单栏图标可刷新/退出
 - 源码与构建说明：https://github.com/$REPO
 EOF
 
