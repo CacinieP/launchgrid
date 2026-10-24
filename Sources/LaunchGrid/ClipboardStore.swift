@@ -29,57 +29,121 @@ struct ClipboardEntry: Identifiable, Codable, Equatable {
     }
 }
 
-/// 剪贴板历史
-///
-/// macOS 没有剪贴板变化的通知（SDK 里查不到 `didChangePasteboardNotification`），
-/// 只能轮询 `changeCount`——那只是一个整型属性读取，开销可以忽略。
-///
-/// 历史要跨浮层收起继续积累，所以这里不看浮层可见性，一直常驻监听。
-/// 只收文本；密码框 / 自动生成 / 瞬时拖拽这几类隐藏内容一律跳过。
-/// 落盘到 Application Support，保留 7 天。
+/// 剪贴板历史。仅在用户启用且未暂停时监听；内容以本地 JSON 明文保存 7 天。
+/// 通过注入独立偏好、pasteboard 和路径，测试不会接触真实剪贴板或历史。
 final class ClipboardStore: ObservableObject {
     @Published private(set) var entries: [ClipboardEntry] = []
     @Published private(set) var lastError: String?
+    @Published private(set) var isPaused = false
+    @Published private(set) var isCapturing = false
 
-    /// 最多保留多少条
     private let maxEntries = 200
-    /// 单条上限，超过不记（避免文件膨胀）
     private let maxEntryBytes = 256 * 1024
-    /// 保留天数
     private let retentionDays = 7
-    /// 轮询间隔
     private let pollInterval: TimeInterval = 0.6
-
-    private var lastChangeCount = -1
+    private let pasteboard: NSPasteboard
+    private let storeURL: URL
+    private let sourceProvider: () -> (bundleID: String?, name: String?)
+    private let now: () -> Date
+    /// A single queue preserves mutation order: an earlier save cannot restore deleted history.
+    private let persistenceQueue = DispatchQueue(label: "com.launchgrid.clipboard.persistence", qos: .utility)
+    private var subscriptions = Set<AnyCancellable>()
+    private var isEnabled: Bool
+    private var ignoredBundleIDs: Set<String>
+    private var isStarted = false
+    private var didLoad = false
+    private var lastChangeCount: Int
     private var timer: Timer?
     private var saveWorkItem: DispatchWorkItem?
     private var cleanupDate: Date?
 
-    // MARK: - 落盘格式
-
     private struct Payload: Codable {
         var version: Int = 1
-        var savedAt: Date = Date()
+        var savedAt: Date
         var entries: [ClipboardEntry]
     }
 
-    private lazy var storeURL: URL = {
+    static var defaultStoreURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        let dir = base.appendingPathComponent("LaunchGrid", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("clipboard.json")
-    }()
+        return base.appendingPathComponent("LaunchGrid", isDirectory: true)
+            .appendingPathComponent("clipboard.json")
+    }
 
-    // MARK: - 生命周期
+    init(
+        preferences: AppPreferences = .shared,
+        pasteboard: NSPasteboard = .general,
+        storeURL: URL? = nil,
+        sourceProvider: @escaping () -> (bundleID: String?, name: String?) = {
+            let front = NSWorkspace.shared.frontmostApplication
+            return (front?.bundleIdentifier, front?.localizedName)
+        },
+        now: @escaping () -> Date = Date.init
+    ) {
+        self.pasteboard = pasteboard
+        self.storeURL = storeURL ?? Self.defaultStoreURL
+        self.sourceProvider = sourceProvider
+        self.now = now
+        self.isEnabled = preferences.clipboardEnabled
+        self.ignoredBundleIDs = Set(preferences.ignoredClipboardBundleIDs)
+        self.lastChangeCount = pasteboard.changeCount
+        preferences.$clipboardEnabled.dropFirst().sink { [weak self] enabled in
+            self?.isEnabled = enabled
+            self?.updateCaptureState()
+        }.store(in: &subscriptions)
+        preferences.$ignoredClipboardBundleIDs.dropFirst().sink { [weak self] identifiers in
+            guard let self else { return }
+            self.ignoredBundleIDs = Set(identifiers)
+            self.lastChangeCount = self.pasteboard.changeCount
+            let before = self.entries.count
+            self.entries.removeAll { entry in
+                entry.sourceBundleID.map { self.ignoredBundleIDs.contains($0) } ?? false
+            }
+            if self.entries.count != before { self.saveNow() }
+        }.store(in: &subscriptions)
+    }
 
-    /// 开始监听。历史要跨浮层收起继续积累，所以这里不看浮层可见性。
+    deinit {
+        timer?.invalidate()
+        saveWorkItem?.cancel()
+    }
+
+    // MARK: - 生命周期与隐私控制
+
     func start() {
-        load()
-        // 启动时先把当前剪贴板里的东西收进来
-        captureCurrent()
+        guard !isStarted else { return }
+        isStarted = true
+        if !didLoad {
+            didLoad = true
+            load()
+        }
+        updateCaptureState()
+    }
 
-        guard timer == nil else { return }
+    func stop() {
+        isStarted = false
+        updateCaptureState()
+        saveNow()
+        // The app's termination callback must finish writing before the process exits.
+        flushPendingWrites()
+    }
+
+    func setPaused(_ paused: Bool) {
+        guard isPaused != paused else { return }
+        isPaused = paused
+        updateCaptureState()
+    }
+
+    private func updateCaptureState() {
+        let shouldCapture = isStarted && isEnabled && !isPaused
+        guard shouldCapture != isCapturing else { return }
+        timer?.invalidate()
+        timer = nil
+        // Never import the current clipboard on start/resume. It may have been copied
+        // while collection was off, paused, or before the user opted in.
+        lastChangeCount = pasteboard.changeCount
+        isCapturing = shouldCapture
+        guard shouldCapture else { return }
         let timer = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in
             self?.captureCurrent()
         }
@@ -87,21 +151,15 @@ final class ClipboardStore: ObservableObject {
         self.timer = timer
     }
 
-    func stop() {
-        timer?.invalidate()
-        timer = nil
-        saveNow()
-    }
-
     // MARK: - 采集
 
-    private func captureCurrent() {
-        let pasteboard = NSPasteboard.general
+    func captureCurrent() {
+        guard isCapturing else { return }
+        runDailyCleanupIfNeeded()
         let count = pasteboard.changeCount
         guard count != lastChangeCount else { return }
         lastChangeCount = count
 
-        // 密码框 / 自动生成 / 瞬时拖拽的内容不记
         let hiddenTypes = [
             NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"),
             NSPasteboard.PasteboardType("org.nspasteboard.AutoGeneratedType"),
@@ -110,31 +168,23 @@ final class ClipboardStore: ObservableObject {
         if let types = pasteboard.types, hiddenTypes.contains(where: { types.contains($0) }) {
             return
         }
-
+        // NSPasteboard does not expose a trustworthy source owner; use the foreground
+        // application as a best-effort approximation, just as the UI discloses.
+        let source = sourceProvider()
+        if let bundleID = source.bundleID, ignoredBundleIDs.contains(bundleID) { return }
         guard let text = pasteboard.string(forType: .string) else { return }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard text.utf8.count <= maxEntryBytes else { return }
 
-        // macOS 27 的 NSPasteboard 没有 changeOwner，来源只能用当前前台 app 近似
-        let front = NSWorkspace.shared.frontmostApplication
-        let sourceBundleID = front?.bundleIdentifier
-        let sourceName = front?.localizedName
-
-        // 同样内容再复制一次：把旧的挪走，最新的留在最前
         entries.removeAll { $0.text == text }
         entries.insert(
             ClipboardEntry(
-                id: UUID(),
-                text: text,
-                createdAt: Date(),
-                sourceBundleID: sourceBundleID,
-                sourceName: sourceName
+                id: UUID(), text: text, createdAt: now(),
+                sourceBundleID: source.bundleID, sourceName: source.name
             ),
             at: 0
         )
-        if entries.count > maxEntries {
-            entries.removeLast(entries.count - maxEntries)
-        }
+        if entries.count > maxEntries { entries.removeLast(entries.count - maxEntries) }
         scheduleSave()
     }
 
@@ -142,12 +192,14 @@ final class ClipboardStore: ObservableObject {
 
     func remove(_ entry: ClipboardEntry) {
         entries.removeAll { $0.id == entry.id }
-        scheduleSave()
+        saveNow()
     }
 
     func clearAll() {
         entries.removeAll()
-        scheduleSave()
+        // Also skip the current pasteboard so clearing cannot immediately recapture it.
+        lastChangeCount = pasteboard.changeCount
+        saveNow()
     }
 
     // MARK: - 落盘
@@ -162,28 +214,30 @@ final class ClipboardStore: ObservableObject {
     func saveNow() {
         saveWorkItem?.cancel()
         saveWorkItem = nil
-
-        let payload = Payload(entries: entries)
+        let payload = Payload(savedAt: now(), entries: entries)
         let url = storeURL
-        // 外层不需要 self（只用 payload 和 url），只在内层回主线程时弱引用
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        persistenceQueue.async { [weak self] in
             do {
+                let directory = url.deletingLastPathComponent()
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.withoutEscapingSlashes]
                 let data = try encoder.encode(payload)
                 try data.write(to: url, options: .atomic)
-                // 剪贴板内容是隐私数据，权限收紧到仅本人可读写
-                try? FileManager.default.setAttributes(
-                    [.posixPermissions: NSNumber(value: 0o600)],
-                    ofItemAtPath: url.path
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: NSNumber(value: 0o600)], ofItemAtPath: url.path
                 )
+                DispatchQueue.main.async { self?.lastError = nil }
             } catch {
                 let message = "剪贴板历史写入失败：\(error.localizedDescription)"
-                DispatchQueue.main.async {
-                    self?.lastError = message
-                }
+                DispatchQueue.main.async { self?.lastError = message }
             }
         }
+    }
+
+    /// Internal synchronization point for shutdown and isolated persistence tests.
+    func flushPendingWrites() {
+        persistenceQueue.sync {}
     }
 
     private func load() {
@@ -193,31 +247,24 @@ final class ClipboardStore: ObservableObject {
             lastError = "剪贴板历史文件损坏，已忽略"
             return
         }
-
-        let cutoff = Date().addingTimeInterval(-Double(retentionDays) * 86400)
+        let cutoff = now().addingTimeInterval(-Double(retentionDays) * 86400)
         entries = payload.entries
-            .filter { $0.createdAt >= cutoff }
+            .filter { entry in
+                entry.createdAt >= cutoff
+                    && !(entry.sourceBundleID.map { ignoredBundleIDs.contains($0) } ?? false)
+            }
             .sorted { $0.createdAt > $1.createdAt }
-        if entries.count > maxEntries {
-            entries.removeLast(entries.count - maxEntries)
-        }
-        if payload.entries.count != entries.count {
-            // 有过期条目被丢掉，落一次盘把文件同步瘦下来
-            scheduleSave()
-        }
+        if entries.count > maxEntries { entries.removeLast(entries.count - maxEntries) }
+        if payload.entries.count != entries.count { scheduleSave() }
     }
 
-    /// 每天做一次过期清理
     func runDailyCleanupIfNeeded() {
-        let today = Calendar.current.startOfDay(for: Date())
+        let today = Calendar.current.startOfDay(for: now())
         if let cleanupDate, Calendar.current.isDate(cleanupDate, inSameDayAs: today) { return }
         cleanupDate = today
-
-        let cutoff = today.addingTimeInterval(-Double(retentionDays) * 86400)
+        let cutoff = now().addingTimeInterval(-Double(retentionDays) * 86400)
         let before = entries.count
         entries.removeAll { $0.createdAt < cutoff }
-        if entries.count != before {
-            scheduleSave()
-        }
+        if entries.count != before { scheduleSave() }
     }
 }
