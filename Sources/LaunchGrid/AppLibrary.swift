@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 
 struct AppItem: Identifiable, Equatable {
     let url: URL
@@ -9,12 +10,9 @@ struct AppItem: Identifiable, Equatable {
     var icon: NSImage { AppIconCache.shared.icon(for: url) }
 }
 
-/// 应用图标缓存
-///
-/// 网格每次重绘都会取图标，不缓存的话每一帧都要从磁盘重新读 .app。
+/// Reused by every grid redraw; the cache is cleared when the installed inventory changes.
 final class AppIconCache {
     static let shared = AppIconCache()
-
     private var cache: [String: NSImage] = [:]
 
     func icon(for url: URL) -> NSImage {
@@ -24,44 +22,112 @@ final class AppIconCache {
         cache[key] = image
         return image
     }
+
+    func invalidate() { cache.removeAll() }
 }
 
-/// 应用清单的可观察包装
-///
-/// 之前刷新清单靠丢弃并重建浮层实现，导致刷新时必须重新 show 一次。
+/// Watches application directories, including category subdirectories and missing-directory parents.
+/// File-system events are debounced; no polling or application launches are required.
 final class AppStore: ObservableObject {
     @Published private(set) var apps: [AppItem] = []
+    private var sources: [DispatchSourceFileSystemObject] = []
+    private var pendingReload: DispatchWorkItem?
+    private var workspaceObserver: NSObjectProtocol?
+    private let searchPaths: [URL]
+
+    init(searchPaths: [URL] = AppLibrary.searchPaths) {
+        self.searchPaths = searchPaths
+        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didMountNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.scheduleReload() }
+    }
 
     func reload() {
-        apps = AppLibrary.apps()
+        precondition(Thread.isMainThread)
+        let inventory = AppLibrary.scan(paths: searchPaths)
+        AppIconCache.shared.invalidate()
+        apps = inventory.apps
+        watch(inventory.directories)
+    }
+
+    private func scheduleReload() {
+        pendingReload?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.reload() }
+        pendingReload = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: work)
+    }
+
+    private func watch(_ directories: [URL]) {
+        sources.forEach { $0.cancel() }
+        sources.removeAll()
+        for url in directories {
+            let descriptor = open(url.path, O_EVTONLY)
+            guard descriptor >= 0 else { continue }
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: descriptor, eventMask: [.write, .rename, .delete, .attrib, .extend, .link, .revoke], queue: .main
+            )
+            source.setEventHandler { [weak self] in self?.scheduleReload() }
+            source.setCancelHandler { close(descriptor) }
+            source.resume()
+            sources.append(source)
+        }
+    }
+
+    deinit {
+        pendingReload?.cancel()
+        sources.forEach { $0.cancel() }
+        if let workspaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver) }
     }
 }
 
-/// 从标准应用目录发现 .app（替代已移除的 Launchpad 数据源）
 enum AppLibrary {
     static var searchPaths: [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return [
-            URL(fileURLWithPath: "/Applications"),
-            URL(fileURLWithPath: "/System/Applications"),
-            URL(fileURLWithPath: "/System/Applications/Utilities"),
-            home.appendingPathComponent("Applications"),
-        ]
+        return [URL(fileURLWithPath: "/Applications"), URL(fileURLWithPath: "/System/Applications"),
+                home.appendingPathComponent("Applications")]
     }
 
-    static func apps() -> [AppItem] {
+    static func apps() -> [AppItem] { scan().apps }
+
+    static func scan(paths: [URL] = searchPaths) -> (apps: [AppItem], directories: [URL]) {
         let fm = FileManager.default
         var seen = Set<String>()
+        var visited = Set<String>()
+        var directories: [URL] = []
         var result: [AppItem] = []
 
-        for dir in searchPaths {
-            guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { continue }
-            for url in files where url.pathExtension == "app" {
-                let name = url.deletingPathExtension().lastPathComponent
-                guard seen.insert(name.lowercased()).inserted else { continue }
-                result.append(AppItem(url: url, name: name))
+        func visit(_ directory: URL, depth: Int) {
+            let canonical = directory.resolvingSymlinksInPath().standardizedFileURL
+            guard depth <= 12, visited.insert(canonical.path).inserted else { return }
+            guard let children = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else {
+                // A newly created ~/Applications should trigger another scan as well.
+                let parent = directory.deletingLastPathComponent()
+                if fm.fileExists(atPath: parent.path) { directories.append(parent) }
+                return
+            }
+            directories.append(directory)
+            for url in children where !url.lastPathComponent.hasPrefix(".") {
+                let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                if url.pathExtension.lowercased() == "app", values?.isDirectory == true {
+                    let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+                    guard seen.insert(resolved.path).inserted else { continue }
+                    let bundle = Bundle(url: url)
+                    let name = (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+                        ?? url.deletingPathExtension().lastPathComponent
+                    result.append(AppItem(url: resolved, name: name))
+                } else if values?.isDirectory == true, values?.isSymbolicLink != true {
+                    visit(url, depth: depth + 1)
+                }
             }
         }
-        return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        paths.forEach { visit($0, depth: 0) }
+        let sorted = result.sorted {
+            let comparison = $0.name.localizedCaseInsensitiveCompare($1.name)
+            return comparison == .orderedSame ? $0.id < $1.id : comparison == .orderedAscending
+        }
+        // Directory URLs from contentsOfDirectory carry a trailing slash; root/missing-parent
+        // URLs may not. Deduplicate by canonical filesystem path rather than URL spelling.
+        let watchPaths = Set(directories.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
+        return (sorted, watchPaths.sorted().map { URL(fileURLWithPath: $0, isDirectory: true) })
     }
 }
