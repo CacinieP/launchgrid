@@ -300,7 +300,7 @@ final class NetworkMonitor: ObservableObject {
 
     /// 读默认网卡的累计字节数
     private static func readInterfaceBytes() -> (rx: UInt64, tx: UInt64) {
-        guard let interface = defaultInterface() else { return (0, 0) }
+        guard let interface = NetworkTools.defaultInterface() else { return (0, 0) }
         guard let output = try? Shell.check("/usr/sbin/netstat", ["-b", "-I", interface], timeout: 5) else {
             return (0, 0)
         }
@@ -532,38 +532,6 @@ final class NetworkMonitor: ObservableObject {
             names[pid] = (path as NSString).lastPathComponent
         }
         return names
-    }
-
-    // MARK: - 接口与网关
-
-    /// 默认路由接口（本机是 en1，不能硬编码 en0）
-    static func defaultInterface() -> String? {
-        guard let output = try? Shell.check("/sbin/route", ["-n", "get", "default"], timeout: 5) else {
-            return nil
-        }
-        for line in output.split(separator: "\n").map(String.init) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("interface:") else { continue }
-            let name = trimmed.replacingOccurrences(of: "interface:", with: "")
-                .trimmingCharacters(in: .whitespaces)
-            if !name.isEmpty { return name }
-        }
-        return nil
-    }
-
-    /// 默认网关
-    static func defaultGateway() -> String? {
-        guard let output = try? Shell.check("/usr/sbin/netstat", ["-nr"], timeout: 5) else { return nil }
-        for line in output.split(separator: "\n").map(String.init) {
-            let cols = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-            guard cols.count >= 2, cols[0] == "default" else { continue }
-            var address = cols[1]
-            if let percent = address.firstIndex(of: "%") {
-                address = String(address[address.startIndex ..< percent])
-            }
-            if !address.isEmpty { return address }
-        }
-        return nil
     }
 
     // MARK: - 历史落盘
