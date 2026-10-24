@@ -1,12 +1,12 @@
 import SwiftUI
 
+/// 应用网格：顶部搜索与背景已上移到 RootView，这里只负责网格与分页
 struct GridContentView: View {
     let apps: [AppItem]
+    @Binding var query: String
     let onLaunch: (AppItem) -> Void
 
-    @State private var query = ""
     @State private var page = 0
-    @FocusState private var searchFocused: Bool
 
     private let columnsCount = 7
     private let perPage = 35
@@ -33,54 +33,30 @@ struct GridContentView: View {
     }
 
     var body: some View {
-        ZStack {
-            VisualEffectBlur(material: .underWindowBackground)
-
-            VStack(spacing: 28) {
-                searchField
-
-                if currentPage.isEmpty {
-                    Text("没有找到应用")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                        .frame(maxHeight: .infinity)
-                } else {
-                    ScrollView(.vertical, showsIndicators: false) {
-                        LazyVGrid(columns: columns, spacing: 28) {
-                            ForEach(currentPage) { app in
-                                AppIconView(app: app) { onLaunch(app) }
-                            }
-                        }
-                        .padding(.horizontal, 48)
-                    }
+        VStack(spacing: 28) {
+            if currentPage.isEmpty {
+                Text("没有找到应用")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
                     .frame(maxHeight: .infinity)
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVGrid(columns: columns, spacing: 28) {
+                        ForEach(currentPage) { app in
+                            AppIconView(app: app) { onLaunch(app) }
+                        }
+                    }
+                    .padding(.horizontal, 48)
                 }
-
-                if pages.count > 1 {
-                    pageIndicator
-                }
+                .frame(maxHeight: .infinity)
             }
-            .padding(.vertical, 36)
-        }
-        .frame(minWidth: 720, minHeight: 480)
-        .preferredColorScheme(.dark)
-        .onAppear { searchFocused = true }
-        .onChange(of: query) { _ in page = 0 }
-    }
 
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("搜索应用", text: $query)
-                .textFieldStyle(.plain)
-                .font(.title3)
-                .focused($searchFocused)
+            if pages.count > 1 {
+                pageIndicator
+            }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .frame(width: 340)
-        .background(.regularMaterial, in: Capsule())
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: query) { _ in page = 0 }
     }
 
     private var pageIndicator: some View {
@@ -114,21 +90,5 @@ private struct AppIconView: View {
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
-    }
-}
-
-struct VisualEffectBlur: NSViewRepresentable {
-    let material: NSVisualEffectView.Material
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.state = .active
-        view.blendingMode = .behindWindow
-        view.material = material
-        return view
-    }
-
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {
-        view.material = material
     }
 }

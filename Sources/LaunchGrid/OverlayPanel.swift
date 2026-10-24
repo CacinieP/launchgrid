@@ -6,6 +6,9 @@ import SwiftUI
 final class OverlayPanel: NSPanel {
     private var escMonitor: Any?
 
+    /// 浮层收起时的回调，用于停掉进程轮询
+    var onHide: (() -> Void)?
+
     init(rootView: some View) {
         super.init(contentRect: .zero,
                    styleMask: [.borderless, .nonactivatingPanel],
@@ -38,6 +41,7 @@ final class OverlayPanel: NSPanel {
     func hide() {
         removeEscMonitor()
         orderOut(nil)
+        onHide?()
     }
 
     private func installEscMonitor() {

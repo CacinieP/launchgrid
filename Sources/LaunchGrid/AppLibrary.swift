@@ -1,11 +1,40 @@
 import AppKit
+import Combine
 
 struct AppItem: Identifiable, Equatable {
     let url: URL
     let name: String
 
     var id: String { url.path }
-    var icon: NSImage { NSWorkspace.shared.icon(forFile: url.path) }
+    var icon: NSImage { AppIconCache.shared.icon(for: url) }
+}
+
+/// 应用图标缓存
+///
+/// 网格每次重绘都会取图标，不缓存的话每一帧都要从磁盘重新读 .app。
+final class AppIconCache {
+    static let shared = AppIconCache()
+
+    private var cache: [String: NSImage] = [:]
+
+    func icon(for url: URL) -> NSImage {
+        let key = url.path
+        if let cached = cache[key] { return cached }
+        let image = NSWorkspace.shared.icon(forFile: key)
+        cache[key] = image
+        return image
+    }
+}
+
+/// 应用清单的可观察包装
+///
+/// 之前刷新清单靠丢弃并重建浮层实现，导致刷新时必须重新 show 一次。
+final class AppStore: ObservableObject {
+    @Published private(set) var apps: [AppItem] = []
+
+    func reload() {
+        apps = AppLibrary.apps()
+    }
 }
 
 /// 从标准应用目录发现 .app（替代已移除的 Launchpad 数据源）
