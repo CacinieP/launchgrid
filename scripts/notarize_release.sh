@@ -51,9 +51,11 @@ DMG_SUBMIT="${OUT_DIR}/${APP_NAME}-${VERSION}-submit.dmg"
 DMG_FINAL="${OUT_DIR}/${APP_NAME}-${VERSION}.dmg"
 echo "版本: $VERSION  tag: $TAG"
 
-codesign -dv "$APP" 2>&1 | grep -q "TeamIdentifier=$TEAM_ID" \
+# 注意不要用 grep -q：它会匹配到就退出关闭管道，codesign 可能吃 SIGPIPE，
+# 在 pipefail 下整个管道被判失败（时机相关，时灵时不灵）
+codesign -dv "$APP" 2>&1 | grep "TeamIdentifier=$TEAM_ID" >/dev/null \
   || { echo "FATAL: app 未用 Developer ID Application 签名（Team $TEAM_ID）"; exit 1; }
-codesign -dv --verbose=4 "$APP" 2>&1 | grep -q "flags=0x10000(runtime)" \
+codesign -dv --verbose=4 "$APP" 2>&1 | grep "flags=0x10000(runtime)" >/dev/null \
   || { echo "FATAL: app 未启用 hardened runtime（codesign 缺 --options runtime）"; exit 1; }
 
 if [ "$MODE" = "asc_key" ]; then
