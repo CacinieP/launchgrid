@@ -2,6 +2,18 @@ import XCTest
 @testable import LaunchGrid
 
 final class UpdateCheckerTests: XCTestCase {
+    func testAutomaticChecksRespectDailyIntervalAndDisabledPreference() {
+        let previous = Date(timeIntervalSince1970: 100_000)
+        XCTAssertFalse(UpdateChecker.shouldCheckAutomatically(enabled: true, lastSuccessfulCheck: previous,
+                                                              now: previous.addingTimeInterval(86399)))
+        XCTAssertTrue(UpdateChecker.shouldCheckAutomatically(enabled: true, lastSuccessfulCheck: previous,
+                                                             now: previous.addingTimeInterval(86400)))
+        XCTAssertFalse(UpdateChecker.shouldCheckAutomatically(enabled: false, lastSuccessfulCheck: previous,
+                                                              now: previous.addingTimeInterval(172800)))
+        XCTAssertFalse(UpdateChecker.shouldCheckAutomatically(enabled: true, lastSuccessfulCheck: previous,
+                                                              now: previous.addingTimeInterval(-3600)))
+    }
+
     func testNotarizedDMGInstallationAndWrongVersionPreservesExistingApp() throws {
         let environment = ProcessInfo.processInfo.environment
         guard let dmg = environment["LAUNCHGRID_UPDATE_TEST_DMG"],
@@ -16,6 +28,8 @@ final class UpdateCheckerTests: XCTestCase {
         try fm.copyItem(at: URL(fileURLWithPath: source), to: destination)
         let executable = destination.appendingPathComponent("Contents/MacOS/LaunchGrid")
         let before = try Data(contentsOf: executable)
+        XCTAssertThrowsError(try UpdateChecker.verifyDeveloperIdentity(at: destination, expectedTeamID: "0000000000"))
+        try UpdateChecker.verifyDeveloperIdentity(at: destination)
         XCTAssertThrowsError(try UpdateChecker.install(dmg: URL(fileURLWithPath: dmg), destination: destination, version: "999.0.0"))
         XCTAssertEqual(try Data(contentsOf: executable), before)
         try UpdateChecker.install(dmg: URL(fileURLWithPath: dmg), destination: destination, version: "0.4.2")

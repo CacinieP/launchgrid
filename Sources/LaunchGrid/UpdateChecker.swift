@@ -60,6 +60,7 @@ final class UpdateChecker: ObservableObject {
     @Published private(set) var availableVersion: String?
     @Published private(set) var updateInstalled = false
     private var release: UpdateRelease?
+    private var automaticCheckTimer: Timer?
     private var session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 60
@@ -77,11 +78,26 @@ final class UpdateChecker: ObservableObject {
     }
 
     func checkAutomaticallyIfNeeded() {
-        guard AppPreferences.shared.automaticUpdateChecks else { return }
+        // Menu-bar apps can remain running for weeks. Keep checking after launch,
+        // and let the 24-hour success timestamp prevent repeated network requests.
+        if automaticCheckTimer == nil {
+            let timer = Timer(timeInterval: 3600, repeats: true) { [weak self] _ in
+                self?.checkAutomaticallyIfNeeded()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            automaticCheckTimer = timer
+        }
         let previous = UserDefaults.standard.object(forKey: "launchgrid.lastUpdateCheck") as? Date ?? .distantPast
-        guard Date().timeIntervalSince(previous) >= 86400 else { return }
+        guard Self.shouldCheckAutomatically(enabled: AppPreferences.shared.automaticUpdateChecks,
+                                           lastSuccessfulCheck: previous, now: Date()) else { return }
         checkForUpdates()
     }
+
+    static func shouldCheckAutomatically(enabled: Bool, lastSuccessfulCheck: Date, now: Date) -> Bool {
+        enabled && now.timeIntervalSince(lastSuccessfulCheck) >= 86400
+    }
+
+    deinit { automaticCheckTimer?.invalidate() }
 
     func checkForUpdates() {
         guard !isBusy, !updateInstalled else { return }
@@ -187,7 +203,7 @@ final class UpdateChecker: ObservableObject {
               let installedVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
               ReleaseVersion(installedVersion) == ReleaseVersion(version) else { throw UpdateError.invalidApplication }
         _ = try command("/usr/bin/codesign", ["--verify", "--deep", "--strict", candidate.path])
-        _ = try command("/usr/bin/codesign", ["--verify", "-R", "anchor apple generic and certificate leaf[subject.OU] = \"5CFSU44B7Q\"", candidate.path])
+        try verifyDeveloperIdentity(at: candidate)
         _ = try command("/usr/sbin/spctl", ["--assess", "--type", "execute", candidate.path])
 
         let stage = destination.deletingLastPathComponent().appendingPathComponent(".LaunchGrid-update-" + UUID().uuidString + ".app")
@@ -196,6 +212,12 @@ final class UpdateChecker: ObservableObject {
         _ = try command("/usr/bin/codesign", ["--verify", "--deep", "--strict", stage.path])
         // Foundation replacement preserves the old app if validation or staging failed.
         _ = try fm.replaceItemAt(destination, withItemAt: stage, backupItemName: nil, options: [])
+    }
+
+    static func verifyDeveloperIdentity(at application: URL, expectedTeamID: String = "5CFSU44B7Q") throws {
+        // codesign treats requirement arguments as filenames unless they start with '='.
+        _ = try command("/usr/bin/codesign", ["--verify", "-R",
+                          "=anchor apple generic and certificate leaf[subject.OU] = \"\(expectedTeamID)\"", application.path])
     }
 
     @discardableResult
