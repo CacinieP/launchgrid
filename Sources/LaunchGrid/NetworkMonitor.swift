@@ -116,7 +116,8 @@ final class NetworkMonitor: ObservableObject {
     private var sampleBaseline: (rx: UInt64, tx: UInt64, uptime: UInt64)?
     private let baselineLock = NSLock()
 
-    // 历史累计的当日缓存
+    // 按天累计的内存缓存（主线程访问）：今日增量在 recordSample 里累加，
+    // 过去的天数首次读取文件后缓存，避免周期累计每 5 秒重解析一堆 JSONL
     private var dayTotals: [String: CumulativeTraffic] = [:]
 
     // MARK: - 模型
@@ -217,6 +218,12 @@ final class NetworkMonitor: ObservableObject {
             DispatchQueue.main.async {
                 self.samples.append(sample)
                 if self.samples.count > 2000 { self.samples.removeFirst(self.samples.count - 2000) }
+                // 把增量累加进缓存，cumulative(for:) 就不必为今日重读文件
+                let key = NetworkMonitor.dayKey(sample.timestamp)
+                var cached = self.dayTotals[key] ?? CumulativeTraffic()
+                cached.downloadBytes += sample.downloadBytes
+                cached.uploadBytes += sample.uploadBytes
+                self.dayTotals[key] = cached
                 self.updateCumulative()
                 self.isRecording = false
             }
@@ -245,7 +252,13 @@ final class NetworkMonitor: ObservableObject {
         var day = start
         while day <= now {
             let key = NetworkMonitor.dayKey(day)
-            let value = dayTotals[key] ?? NetworkMonitor.loadDayTotal(day)
+            let value: CumulativeTraffic
+            if let cached = dayTotals[key] {
+                value = cached
+            } else {
+                value = NetworkMonitor.loadDayTotal(day)
+                dayTotals[key] = value
+            }
             total.downloadBytes += value.downloadBytes
             total.uploadBytes += value.uploadBytes
             guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
@@ -646,6 +659,8 @@ final class NetworkMonitor: ObservableObject {
                 ))
             }
             DispatchQueue.main.async {
+                // 当日缓存基于启动时的快照累计而来，重读文件后先失效再重建
+                self?.dayTotals.removeValue(forKey: NetworkMonitor.dayKey(Date()))
                 self?.samples = loaded.sorted { $0.timestamp < $1.timestamp }
                 self?.updateCumulative()
             }
