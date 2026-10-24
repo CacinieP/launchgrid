@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// 浮层的两种模式
+/// 浮层的四种模式
 enum LaunchMode: String, CaseIterable, Identifiable {
     case apps = "应用"
     case processes = "进程"
+    case clipboard = "剪贴板"
+    case network = "网络"
 
     var id: String { rawValue }
 }
@@ -12,8 +14,13 @@ enum LaunchMode: String, CaseIterable, Identifiable {
 struct RootView: View {
     @ObservedObject var appStore: AppStore
     @ObservedObject var monitor: ProcessMonitor
+    @ObservedObject var clipboardStore: ClipboardStore
+    @ObservedObject var pasteContext: PasteContext
+    @ObservedObject var networkMonitor: NetworkMonitor
     @Binding var mode: LaunchMode
     let onLaunch: (AppItem) -> Void
+    /// 收起浮层（回贴前要把前台让给目标 app）
+    let onHidePanel: () -> Void
 
     @State private var query = ""
     @FocusState private var searchFocused: Bool
@@ -35,6 +42,8 @@ struct RootView: View {
         .onChange(of: mode) { newMode in
             // 只有进程页才需要持续跑 ps
             monitor.setActive(newMode == .processes)
+            // 网络页要持续采样流量与连接
+            networkMonitor.setActive(newMode == .network)
         }
     }
 
@@ -45,6 +54,28 @@ struct RootView: View {
             GridContentView(apps: appStore.apps, query: $query, onLaunch: onLaunch)
         case .processes:
             ProcessContentView(monitor: monitor, query: $query)
+        case .clipboard:
+            ClipboardContentView(
+                store: clipboardStore,
+                pasteContext: pasteContext,
+                query: $query,
+                onHide: onHidePanel
+            )
+        case .network:
+            NetworkContentView(
+                monitor: networkMonitor,
+                processMonitor: monitor,
+                query: $query
+            )
+        }
+    }
+
+    private var searchPlaceholder: String {
+        switch mode {
+        case .apps: return "搜索应用"
+        case .processes: return "搜索进程 / PID"
+        case .clipboard: return "搜索剪贴板"
+        case .network: return "搜索进程 / 地址"
         }
     }
 
@@ -59,7 +90,7 @@ struct RootView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: 170)
+            .frame(width: 290)
 
             searchField
 
@@ -72,7 +103,7 @@ struct RootView: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField(mode == .apps ? "搜索应用" : "搜索进程 / PID", text: $query)
+            TextField(searchPlaceholder, text: $query)
                 .textFieldStyle(.plain)
                 .font(.title3)
                 .focused($searchFocused)

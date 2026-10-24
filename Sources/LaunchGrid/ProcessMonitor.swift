@@ -181,4 +181,16 @@ final class ProcessMonitor: ObservableObject {
         }
         return nil
     }
+
+    /// 只知道 PID 时的终止入口（网络页按流量归因后直接处置用）
+    ///
+    /// GUI 应用仍优先走 `NSRunningApplication.terminate()`，让它能自行保存并退出。
+    func terminate(pid: Int32, force: Bool = false) -> String? {
+        if !force,
+           let app = NSRunningApplication(processIdentifier: pid),
+           app.terminate() {
+            return nil
+        }
+        return ProcessMonitor.signal(pid, force ? SIGKILL : SIGTERM)
+    }
 }

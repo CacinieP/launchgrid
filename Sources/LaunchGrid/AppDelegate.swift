@@ -7,9 +7,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: OverlayPanel?
     private var appHotKey: HotKey?
     private var processHotKey: HotKey?
+    private var clipboardHotKey: HotKey?
+    private var networkHotKey: HotKey?
 
     private let appStore = AppStore()
     private let monitor = ProcessMonitor()
+    private let clipboardStore = ClipboardStore()
+    private let pasteContext = PasteContext()
+    private let networkMonitor = NetworkMonitor()
     private var mode: LaunchMode = .apps
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -18,6 +23,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DebugLog.log("apps=\(appStore.apps.count)")
         buildStatusItem()
         DebugLog.log("statusItem built")
+
+        // 剪贴板历史要跨浮层收起继续积累，所以常驻监听
+        clipboardStore.start()
+        DebugLog.log("clipboardStore started entries=\(clipboardStore.entries.count)")
+        DebugLog.log("accessibility trusted=\(PasteBack.isTrusted)")
 
         // F4 → 应用网格
         let appHotKey = HotKey(keyCode: UInt32(kVK_F4), id: 1, modifiers: 0)
@@ -33,17 +43,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.processHotKey = processHotKey
 
-        // 调试用：LAUNCHGRID_SHOW_ON_LAUNCH=apps|processes 可指定启动时直接展示哪个面板
+        // ⇧F4 → 剪贴板历史
+        let clipboardHotKey = HotKey(keyCode: UInt32(kVK_F4), id: 3, modifiers: UInt32(shiftKey))
+        clipboardHotKey.onPress = { [weak self] in
+            DispatchQueue.main.async { self?.toggle(target: .clipboard) }
+        }
+        self.clipboardHotKey = clipboardHotKey
+
+        // ⇧⌥F4 → 网络监控
+        let networkHotKey = HotKey(
+            keyCode: UInt32(kVK_F4),
+            id: 4,
+            modifiers: UInt32(shiftKey | optionKey)
+        )
+        networkHotKey.onPress = { [weak self] in
+            DispatchQueue.main.async { self?.toggle(target: .network) }
+        }
+        self.networkHotKey = networkHotKey
+
+        // 调试用：LAUNCHGRID_SHOW_ON_LAUNCH=apps|processes|clipboard|network 可指定启动时直接展示哪个面板
         let launchMode = ProcessInfo.processInfo.environment["LAUNCHGRID_SHOW_ON_LAUNCH"]
         DebugLog.log("env LAUNCHGRID_SHOW_ON_LAUNCH=\(launchMode ?? "nil")")
         if let launchMode {
-            let initial: LaunchMode = (launchMode == "processes") ? .processes : .apps
+            let initial: LaunchMode
+            switch launchMode {
+            case "processes": initial = .processes
+            case "clipboard": initial = .clipboard
+            case "network": initial = .network
+            default: initial = .apps
+            }
             DispatchQueue.main.async {
                 DebugLog.log("calling showPanel")
                 self.showPanel(mode: initial)
                 DebugLog.log("showPanel returned")
             }
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        clipboardStore.stop()
     }
 
     // MARK: - Status item
@@ -61,6 +99,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "显示进程管理 (⌥F4)",
                                 action: #selector(toggleProcessPanel),
+                                keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "显示剪贴板历史 (⇧F4)",
+                                action: #selector(toggleClipboardPanel),
+                                keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "显示网络监控 (⇧⌥F4)",
+                                action: #selector(toggleNetworkPanel),
                                 keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "刷新应用列表",
@@ -83,6 +127,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         toggle(target: .processes)
     }
 
+    @objc private func toggleClipboardPanel() {
+        toggle(target: .clipboard)
+    }
+
+    @objc private func toggleNetworkPanel() {
+        toggle(target: .network)
+    }
+
     /// 浮层已显示时按同一个热键收起；按另一个热键则原地切换模式
     private func toggle(target: LaunchMode) {
         if let panel, panel.isVisible {
@@ -102,22 +154,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let screen else { DebugLog.log("no screen"); return }
 
         mode = target
+        DebugLog.log("showPanel mode -> \(target.rawValue)")
+
+        // 必须在浮层抢焦点之前抓住前台 app，回贴要用它当目标
+        pasteContext.capture()
 
         if panel == nil {
             // 浮层只建一次，之后靠 mode binding 切换内容
             let modeBinding = Binding<LaunchMode>(
                 get: { [weak self] in self?.mode ?? .apps },
-                set: { [weak self] in self?.mode = $0 }
+                set: { [weak self] in
+                    DebugLog.log("mode binding set -> \($0.rawValue)")
+                    self?.mode = $0
+                }
             )
             panel = OverlayPanel(rootView: RootView(
                 appStore: appStore,
                 monitor: monitor,
-                mode: modeBinding
-            ) { [weak self] app in
-                self?.launch(app)
-            })
+                clipboardStore: clipboardStore,
+                pasteContext: pasteContext,
+                networkMonitor: networkMonitor,
+                mode: modeBinding,
+                onLaunch: { [weak self] app in
+                    self?.launch(app)
+                },
+                onHidePanel: { [weak self] in
+                    self?.panel?.hide()
+                }
+            ))
             panel?.onHide = { [weak self] in
                 self?.monitor.setActive(false)
+                self?.networkMonitor.setActive(false)
             }
         }
 
@@ -125,11 +192,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if target == .processes {
             monitor.setActive(true)
         }
+        if target == .network {
+            networkMonitor.setActive(true)
+        }
 
         // 调试用：延迟一点等 SwiftUI 布局稳定后再截屏
         if DebugSnapshot.outputPath != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            // 截图延迟可调：有些数据要等几轮采样才有值
+            let delay = Double(ProcessInfo.processInfo.environment["LAUNCHGRID_SNAPSHOT_DELAY"] ?? "") ?? 2
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let view = self?.panel?.contentView else { return }
+                DebugLog.log("snapshot mode=\(self?.mode.rawValue ?? "?") panelVisible=\(self?.panel?.isVisible ?? false)")
                 DebugSnapshot.capture(view)
             }
         }
