@@ -206,6 +206,8 @@ LAUNCHGRID_SHOW_ON_LAUNCH=network /Applications/LaunchGrid.app/Contents/MacOS/La
 LAUNCHGRID_SNAPSHOT_PATH=/tmp/lg.png LAUNCHGRID_SHOW_ON_LAUNCH=network open -a LaunchGrid
 ```
 
+调试日志写入 `/tmp/launchgrid-debug.log`：Debug 构建默认开启；Release 构建默认关闭，需要时用 `defaults write app.caciniep.launchgrid launchgrid.debugLog -bool YES` 打开并重启应用。
+
 完整调试环境变量：
 
 | 变量 | 作用 |
