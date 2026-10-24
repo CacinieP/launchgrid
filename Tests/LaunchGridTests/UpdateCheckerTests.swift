@@ -28,6 +28,8 @@ final class UpdateCheckerTests: XCTestCase {
         try fm.copyItem(at: URL(fileURLWithPath: source), to: destination)
         let executable = destination.appendingPathComponent("Contents/MacOS/LaunchGrid")
         let before = try Data(contentsOf: executable)
+        XCTAssertThrowsError(try UpdateChecker.verifyDeveloperIdentity(at: destination, expectedTeamID: "0000000000"))
+        try UpdateChecker.verifyDeveloperIdentity(at: destination)
         XCTAssertThrowsError(try UpdateChecker.install(dmg: URL(fileURLWithPath: dmg), destination: destination, version: "999.0.0"))
         XCTAssertEqual(try Data(contentsOf: executable), before)
         try UpdateChecker.install(dmg: URL(fileURLWithPath: dmg), destination: destination, version: "0.4.2")

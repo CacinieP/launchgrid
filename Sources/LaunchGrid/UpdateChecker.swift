@@ -203,7 +203,7 @@ final class UpdateChecker: ObservableObject {
               let installedVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
               ReleaseVersion(installedVersion) == ReleaseVersion(version) else { throw UpdateError.invalidApplication }
         _ = try command("/usr/bin/codesign", ["--verify", "--deep", "--strict", candidate.path])
-        _ = try command("/usr/bin/codesign", ["--verify", "-R", "anchor apple generic and certificate leaf[subject.OU] = \"5CFSU44B7Q\"", candidate.path])
+        try verifyDeveloperIdentity(at: candidate)
         _ = try command("/usr/sbin/spctl", ["--assess", "--type", "execute", candidate.path])
 
         let stage = destination.deletingLastPathComponent().appendingPathComponent(".LaunchGrid-update-" + UUID().uuidString + ".app")
@@ -212,6 +212,12 @@ final class UpdateChecker: ObservableObject {
         _ = try command("/usr/bin/codesign", ["--verify", "--deep", "--strict", stage.path])
         // Foundation replacement preserves the old app if validation or staging failed.
         _ = try fm.replaceItemAt(destination, withItemAt: stage, backupItemName: nil, options: [])
+    }
+
+    static func verifyDeveloperIdentity(at application: URL, expectedTeamID: String = "5CFSU44B7Q") throws {
+        // codesign treats requirement arguments as filenames unless they start with '='.
+        _ = try command("/usr/bin/codesign", ["--verify", "-R",
+                          "=anchor apple generic and certificate leaf[subject.OU] = \"\(expectedTeamID)\"", application.path])
     }
 
     @discardableResult
