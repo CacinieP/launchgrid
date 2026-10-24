@@ -2,6 +2,18 @@ import XCTest
 @testable import LaunchGrid
 
 final class UpdateCheckerTests: XCTestCase {
+    func testAutomaticChecksRespectDailyIntervalAndDisabledPreference() {
+        let previous = Date(timeIntervalSince1970: 100_000)
+        XCTAssertFalse(UpdateChecker.shouldCheckAutomatically(enabled: true, lastSuccessfulCheck: previous,
+                                                              now: previous.addingTimeInterval(86399)))
+        XCTAssertTrue(UpdateChecker.shouldCheckAutomatically(enabled: true, lastSuccessfulCheck: previous,
+                                                             now: previous.addingTimeInterval(86400)))
+        XCTAssertFalse(UpdateChecker.shouldCheckAutomatically(enabled: false, lastSuccessfulCheck: previous,
+                                                              now: previous.addingTimeInterval(172800)))
+        XCTAssertFalse(UpdateChecker.shouldCheckAutomatically(enabled: true, lastSuccessfulCheck: previous,
+                                                              now: previous.addingTimeInterval(-3600)))
+    }
+
     func testNotarizedDMGInstallationAndWrongVersionPreservesExistingApp() throws {
         let environment = ProcessInfo.processInfo.environment
         guard let dmg = environment["LAUNCHGRID_UPDATE_TEST_DMG"],
