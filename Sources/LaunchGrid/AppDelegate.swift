@@ -1,24 +1,31 @@
 import AppKit
 import Carbon
+import Combine
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var panel: OverlayPanel?
     private var windowPanel: WindowPanel?
-    private var appHotKey: HotKey?
-    private var processHotKey: HotKey?
-    private var clipboardHotKey: HotKey?
-    private var networkHotKey: HotKey?
-    private var windowHotKey: HotKey?
+    private var hotKeys: [ShortcutAction: HotKey] = [:]
+    private var shortcutMenuItems: [ShortcutAction: NSMenuItem] = [:]
+    private var shortcutWarningMenuItem: NSMenuItem?
+    private var settingsWindow: NSWindow?
     private var escMonitor: Any?
+    private var cancellables = Set<AnyCancellable>()
+    private let preferences = AppPreferences.shared
+    private let navigation = LauncherNavigation()
+    private var inspectionActive = false
 
     private let appStore = AppStore()
     private let monitor = ProcessMonitor()
     private let clipboardStore = ClipboardStore()
     private let pasteContext = PasteContext()
     private let networkMonitor = NetworkMonitor()
-    private var mode: LaunchMode = .apps
+    private var mode: LaunchMode {
+        get { navigation.mode }
+        set { navigation.mode = newValue }
+    }
 
     /// 默认呈现方式，记住用户的选择（UserDefaults）
     private var presentation: LauncherPresentation {
@@ -40,51 +47,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installMainMenu()
         DebugLog.log("didFinishLaunching pid=\(ProcessInfo.processInfo.processIdentifier)")
         appStore.reload()
         DebugLog.log("apps=\(appStore.apps.count)")
         buildStatusItem()
         DebugLog.log("statusItem built")
 
-        // 剪贴板历史要跨浮层收起继续积累，所以常驻监听
+        // The store owns the opt-in preference observer; disabled means no pasteboard polling.
         clipboardStore.start()
-        DebugLog.log("clipboardStore started entries=\(clipboardStore.entries.count)")
-        DebugLog.log("accessibility trusted=\(PasteBack.isTrusted)")
-
-        // F4 → 应用网格
-        let appHotKey = HotKey(keyCode: UInt32(kVK_F4), id: 1, modifiers: 0)
-        appHotKey.onPress = { [weak self] in
-            DispatchQueue.main.async { self?.toggle(target: .apps) }
-        }
-        self.appHotKey = appHotKey
-
-        // ⌥F4 → 进程管理
-        let processHotKey = HotKey(keyCode: UInt32(kVK_F4), id: 2, modifiers: UInt32(optionKey))
-        processHotKey.onPress = { [weak self] in
-            DispatchQueue.main.async { self?.toggle(target: .processes) }
-        }
-        self.processHotKey = processHotKey
-
-        // ⇧F4 → 剪贴板历史
-        let clipboardHotKey = HotKey(keyCode: UInt32(kVK_F4), id: 3, modifiers: UInt32(shiftKey))
-        clipboardHotKey.onPress = { [weak self] in
-            DispatchQueue.main.async { self?.toggle(target: .clipboard) }
-        }
-        self.clipboardHotKey = clipboardHotKey
-
-        // ⇧⌥F4 → 网络监控
-        let networkHotKey = HotKey(keyCode: UInt32(kVK_F4), id: 4, modifiers: UInt32(shiftKey | optionKey))
-        networkHotKey.onPress = { [weak self] in
-            DispatchQueue.main.async { self?.toggle(target: .network) }
-        }
-        self.networkHotKey = networkHotKey
-
-        // ⌘F4 → 直接开窗口模式（沿用上次看的面板）
-        let windowHotKey = HotKey(keyCode: UInt32(kVK_F4), id: 5, modifiers: UInt32(cmdKey))
-        windowHotKey.onPress = { [weak self] in
-            DispatchQueue.main.async { self?.showWindowMode() }
-        }
-        self.windowHotKey = windowHotKey
+        preferences.refreshLoginItemStatus()
+        configureHotKeys()
+        UpdateChecker.shared.checkAutomaticallyIfNeeded()
+        preferences.$shortcutErrors
+            .sink { [weak self] errors in self?.shortcutWarningMenuItem?.isHidden = errors.isEmpty }
+            .store(in: &cancellables)
+        preferences.$networkEnabled
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.applySurfaceActivation() }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: Notification.Name("LaunchGridAppInspectionChanged"))
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in
+                self?.inspectionActive = notification.userInfo?["active"] as? Bool ?? false
+                self?.applySurfaceActivation()
+            }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)
+            .sink { [weak self] _ in self?.preferences.refreshLoginItemStatus() }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: Notification.Name("LaunchGridShowSettings"))
+            .sink { [weak self] _ in self?.showSettings() }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: Notification.Name("LaunchGridCheckForUpdates"))
+            .sink { [weak self] _ in self?.checkForUpdates() }
+            .store(in: &cancellables)
 
         // 调试用：LAUNCHGRID_SHOW_ON_LAUNCH=apps|processes|clipboard|network 可指定启动时直接展示哪个面板
         let launchMode = ProcessInfo.processInfo.environment["LAUNCHGRID_SHOW_ON_LAUNCH"]
@@ -115,9 +113,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         clipboardStore.stop()
+        monitor.setActive(false)
+        networkMonitor.setActive(false)
+        removeEscMonitor()
+        hotKeys.values.forEach { $0.unregister() }
+        hotKeys.removeAll()
+        preferences.shortcutRegistrationHandler = nil
+        preferences.shortcutRecordingHandler = nil
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !isSurfaceVisible { showSurface(mode: lastMode, presentation: presentation) }
+        return false
     }
 
     // MARK: - Status item
+
+    /// AppKit dispatches standard editing shortcuts through these first-responder actions,
+    /// including when SwiftUI text fields live inside an accessory application's panels.
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+        let applicationItem = NSMenuItem(title: "LaunchGrid", action: nil, keyEquivalent: "")
+        let applicationMenu = NSMenu(title: "LaunchGrid")
+        let settingsItem = NSMenuItem(title: "设置…", action: #selector(showSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        applicationMenu.addItem(settingsItem)
+        applicationMenu.addItem(.separator())
+        applicationMenu.addItem(NSMenuItem(title: "退出 LaunchGrid",
+                                           action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        applicationItem.submenu = applicationMenu
+        mainMenu.addItem(applicationItem)
+
+        let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: "编辑")
+        let undo = NSMenuItem(title: "撤销", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = NSMenuItem(title: "重做", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(undo)
+        editMenu.addItem(redo)
+        editMenu.addItem(.separator())
+        editMenu.addItem(NSMenuItem(title: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "复制", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        // nil targets let each focused text editor, sheet, or control handle its own command.
+        editMenu.items.forEach { $0.target = nil }
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
+        NSApp.mainMenu = mainMenu
+    }
 
     private func buildStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -127,22 +171,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image?.isTemplate = true
         }
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "显示应用网格 (F4)",
-                                action: #selector(toggleAppGrid),
-                                keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "显示进程管理 (⌥F4)",
-                                action: #selector(toggleProcessPanel),
-                                keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "显示剪贴板历史 (⇧F4)",
-                                action: #selector(toggleClipboardPanel),
-                                keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "显示网络监控 (⇧⌥F4)",
-                                action: #selector(toggleNetworkPanel),
-                                keyEquivalent: ""))
+        addShortcutMenuItem(.apps, action: #selector(toggleAppGrid), to: menu)
+        addShortcutMenuItem(.processes, action: #selector(toggleProcessPanel), to: menu)
+        addShortcutMenuItem(.clipboard, action: #selector(toggleClipboardPanel), to: menu)
+        addShortcutMenuItem(.network, action: #selector(toggleNetworkPanel), to: menu)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "窗口模式 (⌘F4)",
-                                action: #selector(showWindowMode),
-                                keyEquivalent: ""))
+        addShortcutMenuItem(.window, action: #selector(showWindowMode), to: menu)
         menu.addItem(.separator())
 
         // 默认显示方式：全屏 / 窗口，决定四个面板热键按哪种形态呼出
@@ -163,10 +197,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: #selector(reloadApps),
                                 keyEquivalent: ""))
         menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "设置…", action: #selector(showSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: ""))
+        let shortcutWarning = NSMenuItem(title: "快捷键冲突，打开设置…", action: #selector(showSettings), keyEquivalent: "")
+        shortcutWarning.isHidden = preferences.shortcutErrors.isEmpty
+        shortcutWarningMenuItem = shortcutWarning
+        menu.addItem(shortcutWarning)
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出 LaunchGrid",
                                 action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    private func addShortcutMenuItem(_ shortcutAction: ShortcutAction, action: Selector, to menu: NSMenu) {
+        let item = NSMenuItem(title: "", action: action, keyEquivalent: "")
+        shortcutMenuItems[shortcutAction] = item
+        menu.addItem(item)
+        updateShortcutMenuTitles()
+    }
+
+    private func updateShortcutMenuTitles() {
+        for action in ShortcutAction.allCases {
+            shortcutMenuItems[action]?.title = "\(action == .window ? "" : "显示")\(action.title) (\(preferences.shortcut(for: action).displayText))"
+        }
+    }
+
+    private func configureHotKeys() {
+        for action in ShortcutAction.allCases {
+            let hotKey = makeHotKey(for: action, shortcut: preferences.shortcut(for: action))
+            hotKeys[action] = hotKey
+            preferences.setShortcutError(hotKey.isRegistered ? nil : registrationError(hotKey.registrationStatus), for: action)
+        }
+        preferences.shortcutRegistrationHandler = { [weak self] action, shortcut in
+            guard let self else { return "应用正在退出，请稍后重试。" }
+            let previous = self.preferences.shortcut(for: action)
+            self.hotKeys[action]?.unregister()
+            let replacement = self.makeHotKey(for: action, shortcut: shortcut)
+            guard replacement.isRegistered else {
+                // The old combination stays saved and is restored before returning the error.
+                let restored = self.makeHotKey(for: action, shortcut: previous)
+                self.hotKeys[action] = restored
+                let restoreMessage = restored.isRegistered ? "原快捷键已保留。" : "原快捷键也无法注册，请重新选择。"
+                return self.registrationError(replacement.registrationStatus) + restoreMessage
+            }
+            self.hotKeys[action] = replacement
+            // Preferences saves immediately after this handler succeeds.
+            DispatchQueue.main.async { [weak self] in self?.updateShortcutMenuTitles() }
+            return nil
+        }
+        preferences.shortcutRecordingHandler = { [weak self] recording in
+            guard let self else { return }
+            if recording { self.hotKeys.values.forEach { $0.unregister() } }
+            else { self.configureHotKeys() }
+        }
+    }
+
+    private func makeHotKey(for action: ShortcutAction, shortcut: KeyboardShortcut) -> HotKey {
+        let hotKey = HotKey(keyCode: shortcut.keyCode, id: action.carbonID, modifiers: shortcut.modifiers)
+        hotKey.onPress = { [weak self] in
+            DispatchQueue.main.async {
+                switch action {
+                case .apps: self?.toggle(target: .apps)
+                case .processes: self?.toggle(target: .processes)
+                case .clipboard: self?.toggle(target: .clipboard)
+                case .network: self?.toggle(target: .network)
+                case .window: self?.showWindowMode()
+                }
+            }
+        }
+        return hotKey
+    }
+
+    private func registrationError(_ status: OSStatus) -> String {
+        "快捷键可能已被系统或其他应用占用（错误 \(status)），请选择其他组合。"
+    }
+
+    @objc private func showSettings() {
+        if settingsWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 510),
+                                  styleMask: [.titled, .closable, .miniaturizable],
+                                  backing: .buffered, defer: false)
+            window.title = "LaunchGrid 设置"
+            window.contentView = NSHostingView(rootView: SettingsView(preferences: preferences))
+            window.isReleasedWhenClosed = false
+            window.center()
+            settingsWindow = window
+        }
+        preferences.refreshLoginItemStatus()
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func checkForUpdates() {
+        showSettings()
+        NotificationCenter.default.post(name: Notification.Name("LaunchGridShowUpdateSettings"), object: nil)
+        UpdateChecker.shared.checkForUpdates()
     }
 
     private func updatePresentationMenuState() {
@@ -228,8 +354,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 按当前模式把两个面板的可见性同步过来（进程页/网络页要开始轮询）
     private func applySurfaceActivation() {
-        monitor.setActive(mode == .processes)
-        networkMonitor.setActive(mode == .network)
+        monitor.setActive(isSurfaceVisible && (mode == .processes || inspectionActive))
+        networkMonitor.setActive(isSurfaceVisible && preferences.networkEnabled && (mode == .network || inspectionActive))
+    }
+
+    private func resetInspection() {
+        inspectionActive = false
+        navigation.inspectionRevision &+= 1
     }
 
     private func showSurface(mode target: LaunchMode, presentation pres: LauncherPresentation) {
@@ -244,6 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showFullscreen() {
+        resetInspection()
         let wasVisible = panel?.isVisible ?? false
         // 两种形态互斥：开一种先关另一种
         windowPanel?.hide()
@@ -260,6 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if panel == nil {
             panel = OverlayPanel(rootView: makeRootView())
             panel?.onHide = { [weak self] in
+                self?.resetInspection()
                 self?.applySurfaceActivation()
             }
         }
@@ -270,6 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showWindow() {
+        resetInspection()
         let wasVisible = windowPanel?.isShowing ?? false
         panel?.hide()
 
@@ -280,6 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if windowPanel == nil {
             windowPanel = WindowPanel(rootView: makeRootView())
             windowPanel?.onHide = { [weak self] in
+                self?.resetInspection()
                 self?.applySurfaceActivation()
             }
         }
@@ -290,6 +425,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hideCurrentSurface() {
+        resetInspection()
         if panel?.isVisible == true {
             panel?.hide()
         } else if windowPanel?.isShowing == true {
@@ -306,6 +442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DebugLog.log("mode binding set -> \($0.rawValue)")
                 self?.mode = $0
                 self?.lastMode = $0
+                self?.applySurfaceActivation()
             }
         )
         return RootView(
@@ -314,11 +451,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             clipboardStore: clipboardStore,
             pasteContext: pasteContext,
             networkMonitor: networkMonitor,
+            navigation: navigation,
             mode: modeBinding,
             onLaunch: { [weak self] app in
                 self?.launch(app)
             },
             onHidePanel: { [weak self] in
+                self?.resetInspection()
                 self?.panel?.hide()
                 self?.windowPanel?.hide()
             }
@@ -346,8 +485,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installEscMonitor() {
         removeEscMonitor()
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53 else { return event } // Esc
-            self?.hideCurrentSurface()
+            guard event.keyCode == 53, let self else { return event } // Esc
+            guard let keyWindow = NSApplication.shared.keyWindow,
+                  keyWindow === self.panel || keyWindow === self.windowPanel,
+                  keyWindow.attachedSheet == nil else { return event }
+            if let editor = keyWindow.firstResponder as? NSTextView, editor.hasMarkedText() {
+                return event
+            }
+            self.hideCurrentSurface()
             return nil
         }
     }
@@ -360,6 +505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func launch(_ app: AppItem) {
+        resetInspection()
         panel?.hide()
         windowPanel?.hide()
         let configuration = NSWorkspace.OpenConfiguration()

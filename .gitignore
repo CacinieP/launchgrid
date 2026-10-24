@@ -2,5 +2,6 @@
 .swiftpm/
 DerivedData/
 LaunchGrid.app/
+dist/
 *.xcuserstate
 .DS_Store

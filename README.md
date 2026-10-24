@@ -1,293 +1,73 @@
 # LaunchGrid
 
-<div align="center">
-  <img src="docs/screenshots/apps.png" width="820" alt="LaunchGrid 应用网格（全屏浮层）"/>
-  <p><sub>全屏应用网格 · 四面板共用 F4 系热键 · 更多截图见下文</sub></p>
-</div>
+用熟悉的图标启动 Mac 应用，快速查看它的运行与联网状态。支持全屏网格和可缩放窗口，也能整理文件夹、按拼音搜索。
+
+[下载最新版](https://github.com/CacinieP/launchgrid/releases/latest) · [English](README.en.md) · [0.4.2 更新说明](doc/releases/0.4.2.md) · [使用反馈](https://github.com/CacinieP/launchgrid/issues/new/choose)
 
 [![CI](https://github.com/CacinieP/launchgrid/actions/workflows/ci.yml/badge.svg)](https://github.com/CacinieP/launchgrid/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/CacinieP/launchgrid)](https://github.com/CacinieP/launchgrid/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-black)](https://github.com/CacinieP/launchgrid)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-green)](LICENSE)
 
-macOS 26/27 启动台（Launchpad）移除后的自建替代：一个菜单栏常驻小工具，四个浮层面板共用一次唤出动作。**[⬇ 下载最新版 DMG](https://github.com/CacinieP/launchgrid/releases/latest)**（Developer ID 签名 + Apple 公证）
+<img src="doc/screenshots/apps.png" width="820" alt="LaunchGrid 应用网格"/>
 
-| 面板 | 热键 | 做什么 |
+## 下载与要求
+
+- **macOS 26 或更新版本**，支持 Apple Silicon 和 Intel。
+- 从 [GitHub Releases](https://github.com/CacinieP/launchgrid/releases/latest) 下载 DMG，拖入 **Applications（应用程序）** 后打开。正式发行包使用 Developer ID 签名与 Apple 公证；具体版本和资产以发行页为准。
+- LaunchGrid 常驻菜单栏，没有 Dock 图标。菜单栏图标提供面板入口、设置和退出操作。
+
+## 第一次使用
+
+1. 按 **F4** 打开应用网格；部分键盘需要同时按 **fn**。无反应时，从菜单栏进入「设置…」更换快捷键，查看冲突提示。
+2. 输入应用名、中文拼音、首字母或别名。按 **↓** 进入网格，再用方向键选择、**回车**打开；**Esc** 收起。
+3. 拖动图标排序，右键创建文件夹、移入或移出应用。右上「布局」菜单可备份、恢复布局。
+4. 右键应用 →「查看运行与联网状态…」，查看 CPU、内存、相关进程和可见连接，或请求正常退出。
+
+菜单栏可切换默认全屏/窗口模式；**⌘F4** 直接打开窗口模式。窗口位置与大小会记住，关闭窗口后仍可从菜单栏呼出。登录时启动和所有快捷键都可在设置中调整。
+
+## 主要能力
+
+| 面板 | 默认快捷键 | 用途 |
 |---|---|---|
-| 应用网格 | `F4` | 全屏 App 网格，搜索、分页、点击启动 |
-| 进程管理 | `⌥F4` | 全量进程的 CPU / 内存占用，终止与强杀 |
-| 剪贴板历史 | `⇧F4` | 跨应用剪贴板历史，搜索后**直接回贴**到原位置 |
-| 网络面板 | `⇧⌥F4` | 实时速率、按进程流量归因、连接明细、DNS 管理、断网诊断与急救 |
+| 应用 | F4 | 搜索启动、拖放排序、单层文件夹、别名、布局备份/恢复 |
+| 进程 | ⌥F4 | 查看 CPU/内存，搜索进程与 PID，正常终止或强制终止 |
+| 剪贴板 | ⇧F4 | 可选文本历史、搜索、仅复制或直接回贴 |
+| 网络 | ⇧⌥F4 | 查看速率与连接，检查 DNS，按需诊断与修复 |
 
-无第三方依赖，单个 Swift Package，无 Dock 图标（LSUIElement），全局热键走 Carbon，**不需要辅助功能权限**（仅"直接回贴"需要）。
+应用安装或移除后，列表会自动更新。旧 Launchpad 布局导入需要仍可读取、结构受支持的 Apple 数据库，只匹配已安装的应用；系统已删除的数据库无法恢复。文件夹仅支持一层，剪贴板不记录图片或文件。
 
-## 截图
-
-| 进程管理（⌥F4） | 剪贴板历史（⇧F4） |
+| 进程 | 剪贴板 |
 |---|---|
-| <img src="docs/screenshots/processes.png" width="420"/> | <img src="docs/screenshots/clipboard.png" width="420"/> |
+| <img src="doc/screenshots/processes.png" width="420" alt="进程面板"/> | <img src="doc/screenshots/clipboard.png" width="420" alt="剪贴板面板"/> |
 
-| 网络面板 · 实时流量（⇧⌥F4） | 网络面板 · 断网诊断 |
+| 网络流量 | 网络诊断 |
 |---|---|
-| <img src="docs/screenshots/network-traffic.png" width="420"/> | <img src="docs/screenshots/network-diagnostics.png" width="420"/> |
+| <img src="doc/screenshots/network-traffic.png" width="420" alt="网络流量面板"/> | <img src="doc/screenshots/network-diagnostics.png" width="420" alt="网络诊断面板"/> |
 
-## 两种呈现方式
+## 模块、隐私与权限
 
-同一套面板有两种外壳，可在状态栏菜单里随时切换：
+**剪贴板新安装默认关闭。** 开启后会在后台记录新复制的纯文本；可随时关闭、暂停、忽略指定应用或确认清空。暂停/关闭期间的文本不会在恢复时补录。检测到旧版历史的升级用户延续原开启状态，设置中会显示说明。
 
-| 形态 | 说明 |
-|---|---|
-| **全屏**（默认） | 无边框浮层盖住 Dock 与菜单栏，行为对齐旧 Launchpad，按 Esc 收起 |
-| **窗口** | 标准 macOS 窗口，带标题栏，**可拖动可缩放**，位置与大小自动记住，能和别的应用并排干活 |
+历史仅在本机以**未加密的 JSON 明文**保存，文件权限为 `0600`，保留 7 天、最多 200 条。来源按前台应用估计；忽略某个应用也会移除其已有匹配记录。仅能跳过来源应用主动标记的敏感内容，不能保证识别所有秘密。关闭采集不会自动清空已有历史。
 
-- 四个面板热键按「默认显示方式」呼出；菜单里可把它固定成全屏或窗口
-- `⌘F4` 直接开窗口模式，沿用你上次在看的那一页
-- 窗口模式下点红色关闭按钮只是收起，app 仍留在菜单栏
-- 应用网格的列数随窗口宽度自适应（7 列 → 6 列 → … → 3 列）
+**网络模块可关闭。** 常规采样仅在网络面板或应用详情可见时运行；隐藏/关闭期间的流量不计入累计。连接可见范围受 macOS 权限限制，CPU 为系统平均值。手动 DNS 探测和诊断会发送真实网络请求；修改 DNS 或执行修复前会说明影响，需要时由系统请求管理员授权。
 
+打开应用与全局快捷键不需要辅助功能权限；**直接回贴**需要在「系统设置 → 隐私与安全性 → 辅助功能」授权。未授权时仍可「仅复制」，再自行粘贴。
 
-## 功能
+## 更新
 
-### 应用网格（F4）
+设置中默认开启每日正式版检查，可关闭或手动检查。检查会访问 GitHub；**下载和安装需要单独点击**。
 
-- 全屏 Launchpad 风格浮层：7 列图标网格 + 顶部搜索框 + 底部分页圆点
-- 数据源：`/Applications`、`/System/Applications`、`/System/Applications/Utilities`、`~/Applications`
-- 搜索：大小写/变音符号不敏感的名称过滤
-- 分页：每页 35 个（5×7），圆点可点击跳页；窗口模式下按宽度自适应列数（每页 5 行，列数 3–7）
-- 启动：点击图标经 `NSWorkspace` 打开，并自动收起浮层
-- Esc 关闭浮层；菜单栏图标可唤出/刷新/退出
-- 以 accessory（LSUIElement）方式运行，无 Dock 图标
+安装在可写的 `/Applications` 或 `~/Applications` 时，可在应用内校验并安装新版，再选择重启。其他位置或不满足校验条件时，请从 [发行页](https://github.com/CacinieP/launchgrid/releases/latest) 手动安装。更新器不提供新版启动失败后的自动回滚。
 
-### 进程管理（⌥F4）
+## 反馈与参与
 
-- 列出**全部**进程（含 node / python / launchd 等非 GUI 进程），数据来自 `/bin/ps`
-- 每行显示：进程名、完整可执行路径、PID、用户、CPU%、常驻内存
-- 点表头切换排序（进程名 / PID / CPU / 内存 / 用户），再点一次切换升降序
-- 搜索支持进程名、完整路径、PID
-- 选中后可**终止**（GUI 应用走 `NSRunningApplication.terminate()` 让它自己保存并退出，其余走 SIGTERM）或**强制终止**（SIGKILL）；右键菜单同样可触发
-- 列表每 2 秒自动刷新；只有停留在进程页时才轮询，浮层收起即停
-- GUI 应用显示其应用图标，其余进程显示通用齿轮图标
+请到 [Issues](https://github.com/CacinieP/launchgrid/issues/new/choose) 提交问题或建议，附应用版本、macOS 版本和复现步骤；请勿上传剪贴板内容、凭据或完整连接记录。[一周试用清单](doc/USER_TESTING.md) 可用于记录实际体验。
 
-### 剪贴板历史（⇧F4）
+开发资料移至 **[doc/](doc/README.md)**：[开发与调试](doc/development.md) · [架构](doc/architecture.md) · [技术取舍](doc/decisions.md) · [打包与发布](doc/releasing.md)。
 
-- 常驻监听 `NSPasteboard.general.changeCount`（0.6s 轮询整型计数，开销可忽略），**只收纯文本**
-- 自动跳过 `ConcealedType` / `AutoGeneratedType` / `TransientType`，不记录密码框等敏感内容
-- 落盘到 `~/Library/Application Support/LaunchGrid/clipboard.json`，权限 `0600`，原子写
-- 保留 **7 天**，每次启动按天清理过期条目；上限 200 条、单条 256KB
-- 浮层收起后仍在后台积累（与进程页"仅激活时轮询"不同）
-- 每行显示：时间、内容、来源应用
-- **直接回贴**：双击即把内容写回剪贴板并激活原应用自动粘贴（⌘V）；右键菜单另有"仅复制"、"打开链接"、"删除"
-- 回贴需要在「系统设置 → 隐私与安全性 → 辅助功能」勾选 LaunchGrid；未授权时浮层顶部会显示提示条与「去授权」入口
+## 许可证
 
-### 网络面板（⇧⌥F4）
+自 **0.4.2** 起采用 **AGPL-3.0-only**，完整条文见 [LICENSE](LICENSE)。Copyright © 2026 CacinieP。历史版本保留各自 tag/commit 的许可证记录。
 
-顶部状态条：连接状态、实时上下行速率、今日累计。下方四个子页。
-
-**流量**
-
-- 整机实时速率：`netstat -b -I <默认接口>` 计数器差分（单调时钟计时），首次采样无基线时返回 0，避免开机累计量被误当速率
-- 按进程流量归因：`nettop` 增量采样，进程名截断到 15 字符的部分用 `ps -axo pid=,comm=` 补全
-- 近 5 分钟速率曲线（下行青、上行橙）
-- 历史按 5 秒采样追加写入 `~/Library/Application Support/LaunchGrid/network/traffic-YYYY-MM-DD.jsonl`，日 / 周 / 月累计由此累加
-
-**连接**
-
-- 连接明细唯一数据源为 `lsof -i -n -P`：进程名、PID、协议、本地 / 远端地址、连接状态
-- 进程流量表右键菜单可**终止该进程**（复用进程页的终止 / 强杀通路；不做单击终止，避免刷新重排时误触）
-
-**DNS**
-
-- 读当前 DNS：`scutil --dns`（IPv6 nameserver 按 `]` 后第一个 `:` 切分，避免被截成 `fe80`）
-- 改 DNS：`networksetup -setdnsservers`，参数是**服务名**（如 "Wi-Fi"）而非接口名；服务名经 `networksetup -listallhardwareports` + `-getinfo` 的 MAC 比对三级回退推导
-- DNS 探测：对指定服务器做多次查询，返回平均延迟、成功率、失败次数
-
-内部还实现了 IP 信息查询（公网 IPv4、本机 IPv4 / IPv6、GeoIP、双栈判定），暂未做成界面。
-
-**诊断**
-
-四项检查，各自给出状态（通过 / 警告 / 失败）、耗时与详情：
-
-| 检查 | 内容 |
-|---|---|
-| connectivity | 网关可达性、外网连通性 |
-| ipConfiguration | 默认接口、网关、DNS、地址是否配置完整 |
-| dnsResolution | 域名解析是否正常 |
-| quality | 丢包率与延迟抖动 |
-
-按检查结果给出**修复建议**按钮，可执行 6 种急救动作：
-
-| 动作 | 作用 |
-|---|---|
-| flushDNSCache | 刷新 DNS 缓存 |
-| switchDNS | 切换到备用 DNS |
-| releaseRenewIP | 释放并重新获取 IP 租约 |
-| resetAdapter | 重置网卡 |
-| resetNetworkStack | 重置网络栈 |
-| toggleIPv6 | 开关 IPv6 |
-
-需要管理员权限的动作会弹系统授权框；命令以数组传参不经 shell 拼接，并对含 `"` / `\` 的输入直接拒绝。
-
-四个面板在同一个浮层内用顶部分段控件切换，切换不重建浮层，状态与滚动位置都保留。
-
-## 构建
-
-依赖：Xcode / Swift 工具链（Swift 6.x），无第三方依赖。
-
-```bash
-./scripts/make_app.sh        # swift build -c release + 打 .app bundle + ad-hoc 签名
-cp -R LaunchGrid.app /Applications/
-open -a LaunchGrid
-```
-
-## 公证与发布（发给外部用户）
-
-`make_app.sh` 产出的是 ad-hoc 签名版，只能本机运行；要分发必须 **Developer ID 签名 + Apple 公证**。
-
-**1. 签名**（证书需已在登录钥匙串，见下方「已知坑」）：
-
-```bash
-codesign --force --options runtime --timestamp \
-  --sign "Developer ID Application: <名字> (<Team ID>)" \
-  /Applications/LaunchGrid.app
-```
-
-`--options runtime`（hardened runtime）与 `--timestamp`（安全时间戳）是公证硬性要求；本 bundle 为单 Mach-O、无嵌套可执行代码、无沙箱，**不需要** `--deep` 与 entitlements。
-
-**2. 公证 + 发布**（一条命令跑完）：
-
-```bash
-# 路线 A：App Store Connect API Key（Team 账号需 ISSUER_ID）
-P8_PATH=~/Desktop/AuthKey_XXX.p8 KEY_ID=XXXXXXXXXX [ISSUER_ID=<UUID>] \
-  bash scripts/notarize_release.sh
-
-# 路线 B：Apple ID + App 专用密码（appleid.apple.com 生成）
-APPLE_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx bash scripts/notarize_release.sh
-```
-
-脚本自动完成：前置检查（Developer ID 签名 + hardened runtime）→ ditto 打提交包 → 存凭据并验证 → `notarytool submit --wait` → `stapler staple` + validate → **`spctl` Gatekeeper 门禁（不过则中止，不会误发）** → 重打包 → `gh release create`。版本号默认读 app 的 `CFBundleShortVersionString`（可用 `VERSION=` 覆盖）；产物默认落 `~/Desktop`（可用 `OUT_DIR=` 改）。
-
-**已知坑**（均实测踩过）：
-
-| 现象 | 原因与解法 |
-|---|---|
-| fastlane 建证书卡在 `Could not install WWDR certificate` | fastlane 清单里的 `AppleWWDRCAG5.cer` 等对国内 IP 返 403，`curl -f` 判致命。挂代理下载全部 7 个中间证书并 `security import` 进登录钥匙串，fastlane 即跳过下载 |
-| ASC Key 提交报 `HTTP 401 Unauthenticated` | Team 账号的 Key 必须提供 Issuer ID（集成页面顶部 UUID）；Individual 账号才可留空 |
-| `store-credentials` 对 Individual Key 也弹 Issuer ID 提问 | 非交互运行需喂空行（脚本已处理） |
-| `ditto -c` 产出 cpio 而非 zip | 少了 `-k`；notarytool 只收 PK-Zip |
-
-公证成功后本机自检：
-
-```bash
-spctl -a -t exec -v /Applications/LaunchGrid.app
-# 期望：accepted source=Notarized Developer ID
-```
-
-## 使用
-
-| 操作 | 方式 |
-|---|---|
-| 唤出/收起网格 | F4，或菜单栏 LaunchGrid 图标 → 显示应用网格 |
-| 唤出/收起进程管理 | ⌥F4，或菜单栏 → 显示进程管理 |
-| 唤出/收起剪贴板历史 | ⇧F4，或菜单栏 → 显示剪贴板历史 |
-| 唤出/收起网络面板 | ⇧⌥F4，或菜单栏 → 显示网络面板 |
-| 打开窗口模式 | ⌘F4，或菜单栏 → 窗口模式 |
-| 切换默认显示方式 | 菜单栏 → 默认显示方式 → 全屏 / 窗口 |
-| 切换面板 | 浮层顶部分段控件（应用 / 进程 / 剪贴板 / 网络） |
-| 搜索 | 直接在搜索框输入（应用名 / 进程名 / 路径 / PID / 剪贴板内容 / IP） |
-| 启动 App | 点击图标 |
-| 选择进程 | 点击进程行 |
-| 终止进程 | 选中后点「终止」，或右键 → 终止（SIGTERM） |
-| 强制终止进程 | 选中后点「强制终止」，或右键 → 强制终止（SIGKILL） |
-| 回贴剪贴板条目 | 双击条目（或右键 → 直接回贴） |
-| 仅复制不粘贴 | 右键 → 仅复制 |
-| 网络子页 | 网络面板内第二层分段控件（流量 / 连接 / DNS / 诊断） |
-| 关闭 | Esc |
-| 刷新应用列表 | 菜单栏 → 刷新应用列表 |
-| 退出 | 菜单栏 → 退出 LaunchGrid |
-
-F4 在 macOS 27 已无系统占用；若按下无反应，检查 系统设置 → 键盘 → 键盘快捷键 里是否残留"启动台"映射并移除。
-
-热键分配说明：⌃F2/⌃F3/⌃F4 已被系统占用（菜单栏 / Dock / 下一个窗口），F5 虽然空闲但会被浏览器的刷新键抢走——无修饰键的全局热键会吞掉按键。所以进阶功能依次占用 ⌥F4、⇧F4、⇧⌥F4。
-
-## 调试
-
-```bash
-LAUNCHGRID_SHOW_ON_LAUNCH=apps /Applications/LaunchGrid.app/Contents/MacOS/LaunchGrid
-LAUNCHGRID_SHOW_ON_LAUNCH=processes /Applications/LaunchGrid.app/Contents/MacOS/LaunchGrid
-LAUNCHGRID_SHOW_ON_LAUNCH=clipboard /Applications/LaunchGrid.app/Contents/MacOS/LaunchGrid
-LAUNCHGRID_SHOW_ON_LAUNCH=network /Applications/LaunchGrid.app/Contents/MacOS/LaunchGrid
-```
-
-启动即展示浮层（`apps` / `processes` / `clipboard` / `network` 指定打开哪个页面）；运行日志写入 `/tmp/launchgrid-debug.log`。
-
-没有录屏权限时（`screencapture` 报 `could not create image from display`），可以让应用自己把浮层渲染成 PNG：
-
-```bash
-LAUNCHGRID_SNAPSHOT_PATH=/tmp/lg.png LAUNCHGRID_SHOW_ON_LAUNCH=network open -a LaunchGrid
-```
-
-调试日志写入 `/tmp/launchgrid-debug.log`：Debug 构建默认开启；Release 构建默认关闭，需要时用 `defaults write app.caciniep.launchgrid launchgrid.debugLog -bool YES` 打开并重启应用。
-
-完整调试环境变量：
-
-| 变量 | 作用 |
-|---|---|
-| `LAUNCHGRID_SHOW_ON_LAUNCH` | `apps` / `processes` / `clipboard` / `network`，启动即展示对应面板 |
-| `LAUNCHGRID_NETWORK_TAB` | `traffic` / `connections` / `dns` / `diagnostics`，直接落到网络面板某个子页 |
-| `LAUNCHGRID_SNAPSHOT_PATH` | 指定 PNG 输出路径，不设则不截图 |
-| `LAUNCHGRID_SNAPSHOT_DELAY` | 截图前等待秒数（默认 2）；等采样出值可调大 |
-| `LAUNCHGRID_AUTORUN_DIAGNOSTICS` | 设为 `1` 时进入诊断子页自动跑一次诊断 |
-| `LAUNCHGRID_PRESENTATION` | `fullscreen` / `window`，指定启动时的呈现方式 |
-
-## 结构
-
-```
-Sources/LaunchGrid/
-├── main.swift                 # NSApplication 入口（accessory 模式）
-├── AppDelegate.swift          # 状态栏图标、浮层调度、四个热键、菜单、剪贴板回贴上下文
-├── AppLibrary.swift           # 应用目录扫描 + 图标缓存 + AppStore
-├── GridContentView.swift      # SwiftUI 应用网格/分页
-├── RootView.swift             # 浮层根视图：四模式切换 + 统一搜索框
-├── ProcessMonitor.swift       # ps 取数、进程快照、终止/强制终止
-├── ProcessContentView.swift   # SwiftUI 进程列表/排序/操作栏
-├── ClipboardStore.swift       # 剪贴板轮询采集 + 落盘 + 7 天清理
-├── PasteBack.swift            # 回贴目标捕获 + ⌘V 事件投递
-├── ClipboardContentView.swift # SwiftUI 剪贴板列表/搜索/右键菜单/权限提示
-├── Shell.swift                # 命令执行封装（数组传参、超时、管理员提权、临时文件重定向）
-├── NetworkMonitor.swift       # 整机速率、进程归因、连接明细、历史采样与累计
-├── NetworkTools.swift         # DNS 读写/探测、IP 信息、诊断、修复动作
-├── NetworkContentView.swift   # 网络面板 + 流量曲线 + 四子页分段控件
-├── NetworkToolsViews.swift    # DNS 子页 + 诊断子页
-├── OverlayPanel.swift         # 无边框全屏 NSPanel
-├── WindowPanel.swift          # 窗口模式的标准 NSWindow（可拖动可缩放 + 位置记忆）
-├── HotKey.swift               # Carbon 全局热键（支持修饰键 + 多实例 id）
-├── DebugLog.swift             # /tmp 调试日志
-└── DebugSnapshot.swift        # /tmp 截图（绕开录屏权限）
-scripts/make_app.sh          # 构建打包（ad-hoc 签名）
-scripts/make_icon.swift      # 生成应用图标（AppKit 绘制 → .iconset → iconutil → .icns）
-scripts/notarize_release.sh  # 公证 + GitHub Release 流水线（双认证：ASC Key / Apple ID+App 专用密码）
-Resources/Info.plist         # bundle 元数据（LSUIElement=true）
-Resources/AppIcon.icns       # 应用图标
-```
-
-重新生成图标：
-
-```bash
-swiftc -O scripts/make_icon.swift -o /tmp/genicon && /tmp/genicon /tmp/AppIcon.iconset
-iconutil -c icns /tmp/AppIcon.iconset -o Resources/AppIcon.icns
-```
-
-## 已知限制
-
-- **App Sandbox 必须保持关闭**：`netstat` / `lsof` / `nettop` / `ping` / `networksetup` / `scutil` / `ipconfig` / `route` 等子进程在沙箱内无法启动
-- 窗口模式最小 780×480（再窄顶栏会挤）；应用网格最少 3 列
-- 窗口模式的「直接回贴」目标在窗口**首次打开**时捕获，之后切到别的 app 再呼出不会改写目标
-- 不含文件夹（Launchpad 的 folder 归组）与自定义排序，v1 仅平铺网格
-- `make_app.sh` 产出 ad-hoc 签名版，分发需走上方「公证与发布」流程；**ad-hoc 签名每次重建都会变 cdhash，导致已授予的辅助功能权限失效**——需要长期保留授权时应改用 Developer ID 签名
-- 开机自启需在 系统设置 → 通用 → 登录项 中添加（本机已添加）
-- 进程列表走 `/bin/ps`，CPU% 是系统的衰减平均值，不是瞬时采样
-- 终止别的用户 / root 的进程会因权限不足失败（会明确提示）
-- 连接明细基于 `lsof`，看不到其它用户进程的连接，除非授予「完全磁盘访问权限」
-- `netstat -an` 的 "Active Internet connections" 段在非 shell 启动时不打印，故连接明细只走 `lsof` 单一数据源
-- 首次速率采样无基线，此时速率显示为 0（约 2 秒后出现真实值）
-- 剪贴板历史只记录纯文本，不含图片与文件；回贴依赖辅助功能权限，未授权时只能用「仅复制」
+App 附带完整许可证和该构建对应的源码链接，Release 提供对应源码包；设置 → 关于提供源码与许可证入口。

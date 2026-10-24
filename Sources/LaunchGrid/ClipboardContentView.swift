@@ -4,6 +4,7 @@ import SwiftUI
 struct ClipboardContentView: View {
     @ObservedObject var store: ClipboardStore
     @ObservedObject var pasteContext: PasteContext
+    @ObservedObject private var preferences = AppPreferences.shared
     @Binding var query: String
     /// 收起浮层（回贴前要让出前台）
     let onHide: () -> Void
@@ -11,6 +12,7 @@ struct ClipboardContentView: View {
     @State private var selectedID: UUID?
     @State private var notice: String?
     @State private var trusted = PasteBack.isTrusted
+    @State private var confirmingClear = false
 
     private let timeWidth: CGFloat = 76
     private let sourceWidth: CGFloat = 150
@@ -34,6 +36,9 @@ struct ClipboardContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            collectionControls
+                .padding(.horizontal, 40)
+                .padding(.bottom, 12)
             headerRow
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 40)
@@ -46,7 +51,7 @@ struct ClipboardContentView: View {
                         .font(.title3)
                         .foregroundStyle(.secondary)
                     if store.entries.isEmpty {
-                        Text("复制点东西就会出现在这里")
+                        Text(store.isCapturing ? "新复制的文本会出现在这里" : "当前未收集文本；开启或恢复后只记录新复制的内容")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
@@ -98,6 +103,50 @@ struct ClipboardContentView: View {
             trusted = PasteBack.isTrusted
             store.runDailyCleanupIfNeeded()
         }
+        .alert("清空所有剪贴板历史？", isPresented: $confirmingClear) {
+            Button("取消", role: .cancel) {}
+            Button("清空历史", role: .destructive) {
+                store.clearAll()
+                selectedID = nil
+                notice = nil
+            }
+        } message: {
+            Text("将删除 LaunchGrid 保存的全部文本记录，无法恢复。系统当前剪贴板保持原样。")
+        }
+    }
+
+    private var collectionControls: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 12) {
+                Label(store.isCapturing ? "正在收集新复制的文本" : (preferences.clipboardEnabled && store.isPaused ? "收集已暂停" : "收集已关闭"),
+                      systemImage: store.isCapturing ? "record.circle" : "pause.circle")
+                    .font(.callout)
+                    .foregroundStyle(store.isPaused ? Color.orange : Color.secondary)
+                Spacer(minLength: 0)
+                if preferences.clipboardEnabled {
+                    Button(store.isPaused ? "恢复收集" : "暂停收集") {
+                        store.setPaused(!store.isPaused)
+                    }
+                    Button("关闭收集") { preferences.clipboardEnabled = false }
+                } else {
+                    Button("开启剪贴板历史") {
+                        store.setPaused(false)
+                        preferences.clipboardEnabled = true
+                    }
+                }
+                Button("清空历史…") { confirmingClear = true }
+                    .disabled(store.entries.isEmpty)
+            }
+            Text(preferences.clipboardEnabled
+                 ? "文本仅在本机以明文保存 7 天（最多 200 条）。可在设置中忽略指定应用；来源按前台应用估计。"
+                 : "开启后会在后台记录新复制的文本，仅在本机以明文保存 7 天（最多 200 条）。关闭收集不会删除已有历史，可在此清空；可在设置中忽略指定应用。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let error = store.lastError {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
+        }
     }
 
     private var headerRow: some View {
@@ -115,7 +164,7 @@ struct ClipboardContentView: View {
 
     private var actionBar: some View {
         VStack(spacing: 8) {
-            if !trusted {
+            if !trusted && !store.entries.isEmpty {
                 permissionBanner
             }
 
