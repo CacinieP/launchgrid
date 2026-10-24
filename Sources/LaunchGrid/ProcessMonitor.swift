@@ -160,7 +160,7 @@ final class ProcessMonitor: ObservableObject {
             let code = errno
             switch code {
             case EPERM:
-                return "权限不足：无法终止 PID \(pid)（需要管理员权限）"
+                return "权限不足：PID \(pid) 属于其他用户（root 等特权进程暂不支持终止）"
             case ESRCH:
                 return "进程 PID \(pid) 已退出"
             default:
