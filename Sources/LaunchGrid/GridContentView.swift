@@ -7,12 +7,19 @@ struct GridContentView: View {
     let onLaunch: (AppItem) -> Void
 
     @State private var page = 0
+    /// 列数随窗口宽度变化，窗口模式下缩窄也能正常排
+    @State private var columnsCount = 7
 
-    private let columnsCount = 7
-    private let perPage = 35
+    private let maxColumns = 7
+    private let rowsPerPage = 5
+    private let iconSide: CGFloat = 76
+    private let gridSpacing: CGFloat = 28
+    private let gridPadding: CGFloat = 48
+
+    private var perPage: Int { columnsCount * rowsPerPage }
 
     private var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 28), count: columnsCount)
+        Array(repeating: GridItem(.flexible(), spacing: gridSpacing), count: columnsCount)
     }
 
     private var filtered: [AppItem] {
@@ -33,6 +40,14 @@ struct GridContentView: View {
     }
 
     var body: some View {
+        GeometryReader { geo in
+            content
+                .onAppear { updateColumns(geo.size.width) }
+                .onChange(of: geo.size.width) { width in updateColumns(width) }
+        }
+    }
+
+    private var content: some View {
         VStack(spacing: 28) {
             if currentPage.isEmpty {
                 Text("没有找到应用")
@@ -57,6 +72,17 @@ struct GridContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: query) { _ in page = 0 }
+    }
+
+    /// 按可用宽度算列数：n 个格子要占 n * iconSide + (n - 1) * spacing
+    private func updateColumns(_ width: CGFloat) {
+        let available = max(width - gridPadding * 2, 1)
+        let fit = Int((available + gridSpacing) / (iconSide + gridSpacing))
+        let cols = max(3, min(maxColumns, fit))
+        if cols != columnsCount {
+            columnsCount = cols
+            page = 0
+        }
     }
 
     private var pageIndicator: some View {

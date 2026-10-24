@@ -5,10 +5,13 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var panel: OverlayPanel?
+    private var windowPanel: WindowPanel?
     private var appHotKey: HotKey?
     private var processHotKey: HotKey?
     private var clipboardHotKey: HotKey?
     private var networkHotKey: HotKey?
+    private var windowHotKey: HotKey?
+    private var escMonitor: Any?
 
     private let appStore = AppStore()
     private let monitor = ProcessMonitor()
@@ -16,6 +19,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let pasteContext = PasteContext()
     private let networkMonitor = NetworkMonitor()
     private var mode: LaunchMode = .apps
+
+    /// 默认呈现方式，记住用户的选择（UserDefaults）
+    private var presentation: LauncherPresentation {
+        get {
+            let raw = UserDefaults.standard.string(forKey: "launchgrid.presentation") ?? ""
+            return LauncherPresentation(rawValue: raw) ?? .fullscreen
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "launchgrid.presentation")
+            updatePresentationMenuState()
+        }
+    }
+
+    /// 上次看的面板，⌘F4 开窗口时沿用
+    private var lastMode: LaunchMode = .apps
+
+    /// 菜单里的「默认显示方式」两项，切换时更新选中态
+    private var fullscreenMenuItem: NSMenuItem?
+    private var windowMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DebugLog.log("didFinishLaunching pid=\(ProcessInfo.processInfo.processIdentifier)")
@@ -51,15 +73,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.clipboardHotKey = clipboardHotKey
 
         // ⇧⌥F4 → 网络监控
-        let networkHotKey = HotKey(
-            keyCode: UInt32(kVK_F4),
-            id: 4,
-            modifiers: UInt32(shiftKey | optionKey)
-        )
+        let networkHotKey = HotKey(keyCode: UInt32(kVK_F4), id: 4, modifiers: UInt32(shiftKey | optionKey))
         networkHotKey.onPress = { [weak self] in
             DispatchQueue.main.async { self?.toggle(target: .network) }
         }
         self.networkHotKey = networkHotKey
+
+        // ⌘F4 → 直接开窗口模式（沿用上次看的面板）
+        let windowHotKey = HotKey(keyCode: UInt32(kVK_F4), id: 5, modifiers: UInt32(cmdKey))
+        windowHotKey.onPress = { [weak self] in
+            DispatchQueue.main.async { self?.showWindowMode() }
+        }
+        self.windowHotKey = windowHotKey
 
         // 调试用：LAUNCHGRID_SHOW_ON_LAUNCH=apps|processes|clipboard|network 可指定启动时直接展示哪个面板
         let launchMode = ProcessInfo.processInfo.environment["LAUNCHGRID_SHOW_ON_LAUNCH"]
@@ -72,10 +97,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "network": initial = .network
             default: initial = .apps
             }
+            // 调试用：LAUNCHGRID_PRESENTATION=fullscreen|window 可指定启动时的呈现方式
+            let launchPresentation: LauncherPresentation
+            if let raw = ProcessInfo.processInfo.environment["LAUNCHGRID_PRESENTATION"],
+               let parsed = LauncherPresentation(debugKey: raw) {
+                launchPresentation = parsed
+            } else {
+                launchPresentation = presentation
+            }
             DispatchQueue.main.async {
-                DebugLog.log("calling showPanel")
-                self.showPanel(mode: initial)
-                DebugLog.log("showPanel returned")
+                DebugLog.log("calling showSurface")
+                self.showSurface(mode: initial, presentation: launchPresentation)
+                DebugLog.log("showSurface returned")
             }
         }
     }
@@ -107,6 +140,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: #selector(toggleNetworkPanel),
                                 keyEquivalent: ""))
         menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "窗口模式 (⌘F4)",
+                                action: #selector(showWindowMode),
+                                keyEquivalent: ""))
+        menu.addItem(.separator())
+
+        // 默认显示方式：全屏 / 窗口，决定四个面板热键按哪种形态呼出
+        let presentationMenu = NSMenu(title: "默认显示方式")
+        let fullscreen = NSMenuItem(title: "全屏", action: #selector(setFullscreenPresentation), keyEquivalent: "")
+        let window = NSMenuItem(title: "窗口", action: #selector(setWindowPresentation), keyEquivalent: "")
+        presentationMenu.addItem(fullscreen)
+        presentationMenu.addItem(window)
+        fullscreenMenuItem = fullscreen
+        windowMenuItem = window
+        let presentationItem = NSMenuItem(title: "默认显示方式", action: nil, keyEquivalent: "")
+        presentationItem.submenu = presentationMenu
+        menu.addItem(presentationItem)
+        updatePresentationMenuState()
+
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "刷新应用列表",
                                 action: #selector(reloadApps),
                                 keyEquivalent: ""))
@@ -115,6 +167,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    private func updatePresentationMenuState() {
+        fullscreenMenuItem?.state = presentation == .fullscreen ? .on : .off
+        windowMenuItem?.state = presentation == .window ? .on : .off
+    }
+
+    @objc private func setFullscreenPresentation() {
+        presentation = .fullscreen
+        DebugLog.log("presentation -> 全屏")
+    }
+
+    @objc private func setWindowPresentation() {
+        presentation = .window
+        DebugLog.log("presentation -> 窗口")
     }
 
     // MARK: - Panel
@@ -135,81 +202,166 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         toggle(target: .network)
     }
 
+    /// ⌘F4：直接开窗口模式，沿用上次看的面板
+    @objc private func showWindowMode() {
+        showSurface(mode: lastMode, presentation: .window)
+    }
+
     /// 浮层已显示时按同一个热键收起；按另一个热键则原地切换模式
     private func toggle(target: LaunchMode) {
-        if let panel, panel.isVisible {
+        lastMode = target
+        if isSurfaceVisible {
             if mode == target {
-                panel.hide()
+                hideCurrentSurface()
             } else {
                 mode = target
+                applySurfaceActivation()
             }
             return
         }
-        showPanel(mode: target)
+        showSurface(mode: target, presentation: presentation)
     }
 
-    private func showPanel(mode target: LaunchMode) {
+    private var isSurfaceVisible: Bool {
+        (panel?.isVisible ?? false) || (windowPanel?.isShowing ?? false)
+    }
+
+    /// 按当前模式把两个面板的可见性同步过来（进程页/网络页要开始轮询）
+    private func applySurfaceActivation() {
+        monitor.setActive(mode == .processes)
+        networkMonitor.setActive(mode == .network)
+    }
+
+    private func showSurface(mode target: LaunchMode, presentation pres: LauncherPresentation) {
+        mode = target
+        lastMode = target
+        switch pres {
+        case .fullscreen:
+            showFullscreen()
+        case .window:
+            showWindow()
+        }
+    }
+
+    private func showFullscreen() {
+        let wasVisible = panel?.isVisible ?? false
+        // 两种形态互斥：开一种先关另一种
+        windowPanel?.hide()
+
         let screen = NSScreen.main ?? NSScreen.screens.first
         DebugLog.log("showPanel screens=\(NSScreen.screens.count) main=\(NSScreen.main != nil)")
         guard let screen else { DebugLog.log("no screen"); return }
 
-        mode = target
-        DebugLog.log("showPanel mode -> \(target.rawValue)")
-
-        // 必须在浮层抢焦点之前抓住前台 app，回贴要用它当目标
-        pasteContext.capture()
+        // 浮层还没显示时才有真正的「前台 app」可抓，已经显示着就沿用旧目标
+        if !wasVisible {
+            pasteContext.capture()
+        }
 
         if panel == nil {
-            // 浮层只建一次，之后靠 mode binding 切换内容
-            let modeBinding = Binding<LaunchMode>(
-                get: { [weak self] in self?.mode ?? .apps },
-                set: { [weak self] in
-                    DebugLog.log("mode binding set -> \($0.rawValue)")
-                    self?.mode = $0
-                }
-            )
-            panel = OverlayPanel(rootView: RootView(
-                appStore: appStore,
-                monitor: monitor,
-                clipboardStore: clipboardStore,
-                pasteContext: pasteContext,
-                networkMonitor: networkMonitor,
-                mode: modeBinding,
-                onLaunch: { [weak self] app in
-                    self?.launch(app)
-                },
-                onHidePanel: { [weak self] in
-                    self?.panel?.hide()
-                }
-            ))
+            panel = OverlayPanel(rootView: makeRootView())
             panel?.onHide = { [weak self] in
-                self?.monitor.setActive(false)
-                self?.networkMonitor.setActive(false)
+                self?.applySurfaceActivation()
             }
         }
-
         panel?.show(on: screen)
-        if target == .processes {
-            monitor.setActive(true)
-        }
-        if target == .network {
-            networkMonitor.setActive(true)
+        applySurfaceActivation()
+        installEscMonitor()
+        scheduleSnapshot()
+    }
+
+    private func showWindow() {
+        let wasVisible = windowPanel?.isShowing ?? false
+        panel?.hide()
+
+        if !wasVisible {
+            pasteContext.capture()
         }
 
-        // 调试用：延迟一点等 SwiftUI 布局稳定后再截屏
-        if DebugSnapshot.outputPath != nil {
-            // 截图延迟可调：有些数据要等几轮采样才有值
-            let delay = Double(ProcessInfo.processInfo.environment["LAUNCHGRID_SNAPSHOT_DELAY"] ?? "") ?? 2
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let view = self?.panel?.contentView else { return }
-                DebugLog.log("snapshot mode=\(self?.mode.rawValue ?? "?") panelVisible=\(self?.panel?.isVisible ?? false)")
-                DebugSnapshot.capture(view)
+        if windowPanel == nil {
+            windowPanel = WindowPanel(rootView: makeRootView())
+            windowPanel?.onHide = { [weak self] in
+                self?.applySurfaceActivation()
             }
+        }
+        windowPanel?.show()
+        applySurfaceActivation()
+        installEscMonitor()
+        scheduleSnapshot()
+    }
+
+    private func hideCurrentSurface() {
+        if panel?.isVisible == true {
+            panel?.hide()
+        } else if windowPanel?.isShowing == true {
+            windowPanel?.hide()
+        }
+        removeEscMonitor()
+    }
+
+    /// 两个形态共用同一份 RootView，靠 mode binding 同步内容
+    private func makeRootView() -> some View {
+        let modeBinding = Binding<LaunchMode>(
+            get: { [weak self] in self?.mode ?? .apps },
+            set: { [weak self] in
+                DebugLog.log("mode binding set -> \($0.rawValue)")
+                self?.mode = $0
+                self?.lastMode = $0
+            }
+        )
+        return RootView(
+            appStore: appStore,
+            monitor: monitor,
+            clipboardStore: clipboardStore,
+            pasteContext: pasteContext,
+            networkMonitor: networkMonitor,
+            mode: modeBinding,
+            onLaunch: { [weak self] app in
+                self?.launch(app)
+            },
+            onHidePanel: { [weak self] in
+                self?.panel?.hide()
+                self?.windowPanel?.hide()
+            }
+        )
+    }
+
+    // MARK: - 调试截图
+
+    /// 延迟一点等 SwiftUI 布局稳定后再截屏，两种形态都能截
+    private func scheduleSnapshot() {
+        guard DebugSnapshot.outputPath != nil else { return }
+        let delay = Double(ProcessInfo.processInfo.environment["LAUNCHGRID_SNAPSHOT_DELAY"] ?? "") ?? 2
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            let isWindow = self.windowPanel?.isShowing == true
+            let view = isWindow ? self.windowPanel?.contentView : self.panel?.contentView
+            guard let view else { return }
+            DebugLog.log("snapshot mode=\(self.mode.rawValue) window=\(isWindow)")
+            DebugSnapshot.capture(view)
+        }
+    }
+
+    // MARK: - Esc
+
+    private func installEscMonitor() {
+        removeEscMonitor()
+        escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return event } // Esc
+            self?.hideCurrentSurface()
+            return nil
+        }
+    }
+
+    private func removeEscMonitor() {
+        if let escMonitor {
+            NSEvent.removeMonitor(escMonitor)
+            self.escMonitor = nil
         }
     }
 
     private func launch(_ app: AppItem) {
         panel?.hide()
+        windowPanel?.hide()
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         NSWorkspace.shared.openApplication(at: app.url, configuration: configuration) { _, _ in }

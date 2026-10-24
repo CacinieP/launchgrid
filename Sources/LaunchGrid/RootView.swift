@@ -36,7 +36,7 @@ struct RootView: View {
             }
             .padding(.vertical, 28)
         }
-        .frame(minWidth: 860, minHeight: 600)
+        .frame(minWidth: 660, minHeight: 400)
         .preferredColorScheme(.dark)
         .onAppear { searchFocused = true }
         .onChange(of: mode) { newMode in

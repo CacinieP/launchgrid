@@ -1,11 +1,15 @@
 import AppKit
 import Foundation
 
-// 生成 LaunchGrid 应用图标 v3 —— 「Field Notes」
+// 生成 LaunchGrid 应用图标 v4 —— 「Field Notes / 四格」
 //
 // 配色与形态对齐 CacinieP 个人主页（github.com/CacinieP）的编辑/手册风格：
 //   深青蓝 #244c57（蓝）· 低饱和赭黄 #d9b97a（黄）· 米白 #fbf8f2 · 墨线 #14262b
 // 特征：哑光低饱和、直角化多过圆角、细描边而非投影、极简配色
+//
+// v4 的变化：2×2 四格各自带上功能微符号，对应四个面板
+//   左上 应用 = 迷你网格   右上 进程 = 活动波形
+//   左下 剪贴板 = 剪贴板轮廓   右下 网络 = 节点连线（米白底，延续 v3 的「活跃」块）
 //
 // 输出标准 .iconset 目录，随后用 iconutil 合成 .icns
 
@@ -83,17 +87,130 @@ func drawIcon(into ctx: CGContext, pixels: CGFloat) {
         )
     }
 
-    // 三个赭黄格子
-    for (row, col) in [(0, 0), (0, 1), (1, 0)] {
-        let rect = tileRect(row: row, col: col)
+    func roundRectPath(_ rect: CGRect, _ r: CGFloat) -> CGPath {
+        CGPath(roundedRect: rect, cornerWidth: r, cornerHeight: r, transform: nil)
+    }
+
+    /// 格子局部坐标（0...1，y 轴向上）→ 实际点
+    func pt(_ rect: CGRect, _ u: CGFloat, _ v: CGFloat) -> CGPoint {
+        CGPoint(x: rect.minX + rect.width * u, y: rect.minY + rect.height * v)
+    }
+
+    // MARK: 四个功能符号
+
+    /// 应用：迷你网格
+    func glyphApps(_ rect: CGRect) {
+        let side = rect.width * 0.22
+        let gap = rect.width * 0.10
+        let total = side * 2 + gap
+        let x0 = rect.midX - total / 2
+        let y0 = rect.midY - total / 2
+        ctx.setFillColor(rgb(ink))
+        for row in 0..<2 {
+            for col in 0..<2 {
+                let sq = CGRect(
+                    x: x0 + CGFloat(col) * (side + gap),
+                    y: y0 + CGFloat(row) * (side + gap),
+                    width: side,
+                    height: side
+                )
+                ctx.addPath(roundRectPath(sq, side * 0.22))
+                ctx.fillPath()
+            }
+        }
+    }
+
+    /// 进程：活动波形（沿用 v3 的母题）
+    func glyphProcess(_ rect: CGRect) {
+        let points: [(CGFloat, CGFloat)] = [
+            (0.14, 0.62), (0.32, 0.32), (0.50, 0.72), (0.68, 0.28), (0.86, 0.50),
+        ]
+        ctx.setStrokeColor(rgb(ink))
+        ctx.setLineWidth(rect.width * 0.085)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+        ctx.beginPath()
+        ctx.move(to: pt(rect, points[0].0, points[0].1))
+        for p in points.dropFirst() {
+            ctx.addLine(to: pt(rect, p.0, p.1))
+        }
+        ctx.strokePath()
+    }
+
+    /// 剪贴板：板身 + 顶部夹子
+    func glyphClipboard(_ rect: CGRect) {
+        let board = CGRect(
+            x: rect.minX + rect.width * 0.24,
+            y: rect.minY + rect.height * 0.12,
+            width: rect.width * 0.52,
+            height: rect.height * 0.64
+        )
+        ctx.setStrokeColor(rgb(ink))
+        ctx.setLineWidth(rect.width * 0.062)
+        ctx.addPath(roundRectPath(board, rect.width * 0.07))
+        ctx.strokePath()
+
+        let clip = CGRect(
+            x: rect.minX + rect.width * 0.39,
+            y: rect.minY + rect.height * 0.68,
+            width: rect.width * 0.22,
+            height: rect.height * 0.20
+        )
+        ctx.setFillColor(rgb(ink))
+        ctx.addPath(roundRectPath(clip, rect.width * 0.05))
+        ctx.fillPath()
+    }
+
+    /// 网络：中心节点 + 三条连线（对应「连接」明细）
+    func glyphNetwork(_ rect: CGRect) {
+        let center = pt(rect, 0.5, 0.44)
+        let satellites = [pt(rect, 0.17, 0.80), pt(rect, 0.83, 0.80), pt(rect, 0.5, 0.12)]
+
+        ctx.setStrokeColor(rgb(ink))
+        ctx.setLineWidth(rect.width * 0.055)
+        ctx.setLineCap(.round)
+        for node in satellites {
+            ctx.beginPath()
+            ctx.move(to: center)
+            ctx.addLine(to: node)
+            ctx.strokePath()
+        }
+
+        ctx.setFillColor(rgb(ink))
+        for node in satellites {
+            let r = rect.width * 0.085
+            ctx.addEllipse(in: CGRect(x: node.x - r, y: node.y - r, width: r * 2, height: r * 2))
+            ctx.fillPath()
+        }
+        let cr = rect.width * 0.105
+        ctx.addEllipse(in: CGRect(x: center.x - cr, y: center.y - cr, width: cr * 2, height: cr * 2))
+        ctx.fillPath()
+    }
+
+    // MARK: 四格：左上 应用 / 右上 进程 / 左下 剪贴板 / 右下 网络
+
+    let cells: [(row: Int, col: Int, cream: Bool, glyph: (CGRect) -> Void)] = [
+        (0, 0, false, glyphApps),
+        (0, 1, false, glyphProcess),
+        (1, 0, false, glyphClipboard),
+        (1, 1, true, glyphNetwork),
+    ]
+
+    for cell in cells {
+        let rect = tileRect(row: cell.row, col: cell.col)
+
+        // 底色：赭黄渐变 / 米白平涂
         ctx.saveGState()
-        ctx.addPath(CGPath(roundedRect: rect, cornerWidth: tileRadius, cornerHeight: tileRadius, transform: nil))
-        if let gradient = CGGradient(
+        ctx.addPath(roundRectPath(rect, tileRadius))
+        ctx.clip()
+        if cell.cream {
+            ctx.setFillColor(rgb(cream))
+            ctx.fill(rect)
+        } else if let gradient = CGGradient(
             colorsSpace: colorSpace,
             colors: [rgb(ochre), rgb(ochreDeep)] as CFArray,
             locations: [0, 1]
         ) {
-            ctx.clip()
             ctx.drawLinearGradient(
                 gradient,
                 start: CGPoint(x: rect.midX, y: rect.maxY),
@@ -102,41 +219,22 @@ func drawIcon(into ctx: CGContext, pixels: CGFloat) {
             )
         }
         ctx.restoreGState()
-    }
 
-    // ── 右下角「活跃」块：米白底 + 墨线描边 + 墨线波形 ──────────
-    // 对应主页里 INTENT / TOOLS / EVAL 那种「米白填充 + 墨线」的节点
-    let active = tileRect(row: 1, col: 1)
-    ctx.saveGState()
-    ctx.addPath(CGPath(roundedRect: active, cornerWidth: tileRadius, cornerHeight: tileRadius, transform: nil))
-    ctx.setFillColor(rgb(cream))
-    ctx.fillPath()
-    ctx.setStrokeColor(rgb(ink))
-    ctx.setLineWidth(tile * 0.052)
-    ctx.addPath(CGPath(roundedRect: active, cornerWidth: tileRadius, cornerHeight: tileRadius, transform: nil))
-    ctx.strokePath()
-    ctx.restoreGState()
+        // 墨线描边
+        ctx.saveGState()
+        ctx.setStrokeColor(rgb(ink))
+        ctx.setLineWidth(tile * 0.042)
+        ctx.addPath(roundRectPath(rect, tileRadius))
+        ctx.strokePath()
+        ctx.restoreGState()
 
-    // 块内：进程活动波形
-    ctx.saveGState()
-    ctx.addPath(CGPath(roundedRect: active, cornerWidth: tileRadius, cornerHeight: tileRadius, transform: nil))
-    ctx.clip()
-    ctx.setStrokeColor(rgb(ink))
-    ctx.setLineWidth(tile * 0.085)
-    ctx.setLineCap(.round)
-    ctx.setLineJoin(.round)
-    let points: [(CGFloat, CGFloat)] = [
-        (0.14, 0.62), (0.32, 0.32), (0.50, 0.72), (0.68, 0.28), (0.86, 0.50),
-    ]
-    ctx.beginPath()
-    ctx.move(to: CGPoint(x: active.minX + active.width * points[0].0,
-                          y: active.minY + active.height * points[0].1))
-    for p in points.dropFirst() {
-        ctx.addLine(to: CGPoint(x: active.minX + active.width * p.0,
-                                y: active.minY + active.height * p.1))
+        // 功能符号
+        ctx.saveGState()
+        ctx.addPath(roundRectPath(rect, tileRadius))
+        ctx.clip()
+        cell.glyph(rect)
+        ctx.restoreGState()
     }
-    ctx.strokePath()
-    ctx.restoreGState()
 }
 
 func render(pixels: Int) -> Data? {

@@ -13,10 +13,10 @@ final class PasteContext: ObservableObject {
 
     func capture() {
         let app = NSWorkspace.shared.frontmostApplication
-        // LaunchGrid 自己（LSUIElement 菜单栏 app）不算目标
+        // LaunchGrid 自己（LSUIElement 菜单栏 app）不算目标。
+        // 窗口模式下用户可能已经点进窗口里，这时前台就是 LaunchGrid，
+        // 应当沿用上一次抓到的目标，而不是把它清空。
         if let app, app.bundleIdentifier == Bundle.main.bundleIdentifier {
-            target = nil
-            targetName = nil
             return
         }
         target = app

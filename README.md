@@ -11,6 +11,21 @@ macOS 26/27 启动台（Launchpad）移除后的自建替代：一个菜单栏�
 
 无第三方依赖，单个 Swift Package，无 Dock 图标（LSUIElement），全局热键走 Carbon，**不需要辅助功能权限**（仅"直接回贴"需要）。
 
+## 两种呈现方式
+
+同一套面板有两种外壳，可在状态栏菜单里随时切换：
+
+| 形态 | 说明 |
+|---|---|
+| **全屏**（默认） | 无边框浮层盖住 Dock 与菜单栏，行为对齐旧 Launchpad，按 Esc 收起 |
+| **窗口** | 标准 macOS 窗口，带标题栏，**可拖动可缩放**，位置与大小自动记住，能和别的应用并排干活 |
+
+- 四个面板热键按「默认显示方式」呼出；菜单里可把它固定成全屏或窗口
+- `⌘F4` 直接开窗口模式，沿用你上次在看的那一页
+- 窗口模式下点红色关闭按钮只是收起，app 仍留在菜单栏
+- 应用网格的列数随窗口宽度自适应（7 列 → 6 列 → … → 3 列）
+
+
 ## 功能
 
 ### 应用网格（F4）
@@ -18,7 +33,7 @@ macOS 26/27 启动台（Launchpad）移除后的自建替代：一个菜单栏�
 - 全屏 Launchpad 风格浮层：7 列图标网格 + 顶部搜索框 + 底部分页圆点
 - 数据源：`/Applications`、`/System/Applications`、`/System/Applications/Utilities`、`~/Applications`
 - 搜索：大小写/变音符号不敏感的名称过滤
-- 分页：每页 35 个（5×7），圆点可点击跳页
+- 分页：每页 35 个（5×7），圆点可点击跳页；窗口模式下按宽度自适应列数（每页 5 行，列数 3–7）
 - 启动：点击图标经 `NSWorkspace` 打开，并自动收起浮层
 - Esc 关闭浮层；菜单栏图标可唤出/刷新/退出
 - 以 accessory（LSUIElement）方式运行，无 Dock 图标
@@ -155,6 +170,8 @@ spctl -a -t exec -v /Applications/LaunchGrid.app
 | 唤出/收起进程管理 | ⌥F4，或菜单栏 → 显示进程管理 |
 | 唤出/收起剪贴板历史 | ⇧F4，或菜单栏 → 显示剪贴板历史 |
 | 唤出/收起网络面板 | ⇧⌥F4，或菜单栏 → 显示网络面板 |
+| 打开窗口模式 | ⌘F4，或菜单栏 → 窗口模式 |
+| 切换默认显示方式 | 菜单栏 → 默认显示方式 → 全屏 / 窗口 |
 | 切换面板 | 浮层顶部分段控件（应用 / 进程 / 剪贴板 / 网络） |
 | 搜索 | 直接在搜索框输入（应用名 / 进程名 / 路径 / PID / 剪贴板内容 / IP） |
 | 启动 App | 点击图标 |
@@ -198,6 +215,7 @@ LAUNCHGRID_SNAPSHOT_PATH=/tmp/lg.png LAUNCHGRID_SHOW_ON_LAUNCH=network open -a L
 | `LAUNCHGRID_SNAPSHOT_PATH` | 指定 PNG 输出路径，不设则不截图 |
 | `LAUNCHGRID_SNAPSHOT_DELAY` | 截图前等待秒数（默认 2）；等采样出值可调大 |
 | `LAUNCHGRID_AUTORUN_DIAGNOSTICS` | 设为 `1` 时进入诊断子页自动跑一次诊断 |
+| `LAUNCHGRID_PRESENTATION` | `fullscreen` / `window`，指定启动时的呈现方式 |
 
 ## 结构
 
@@ -218,7 +236,8 @@ Sources/LaunchGrid/
 ├── NetworkTools.swift         # DNS 读写/探测、IP 信息、诊断、修复动作
 ├── NetworkContentView.swift   # 网络面板 + 流量曲线 + 四子页分段控件
 ├── NetworkToolsViews.swift    # DNS 子页 + 诊断子页
-├── OverlayPanel.swift         # 无边框全屏 NSPanel + Esc 监听
+├── OverlayPanel.swift         # 无边框全屏 NSPanel
+├── WindowPanel.swift          # 窗口模式的标准 NSWindow（可拖动可缩放 + 位置记忆）
 ├── HotKey.swift               # Carbon 全局热键（支持修饰键 + 多实例 id）
 ├── DebugLog.swift             # /tmp 调试日志
 └── DebugSnapshot.swift        # /tmp 截图（绕开录屏权限）
@@ -239,6 +258,8 @@ iconutil -c icns /tmp/AppIcon.iconset -o Resources/AppIcon.icns
 ## 已知限制
 
 - **App Sandbox 必须保持关闭**：`netstat` / `lsof` / `nettop` / `ping` / `networksetup` / `scutil` / `ipconfig` / `route` 等子进程在沙箱内无法启动
+- 窗口模式最小 780×480（再窄顶栏会挤）；应用网格最少 3 列
+- 窗口模式的「直接回贴」目标在窗口**首次打开**时捕获，之后切到别的 app 再呼出不会改写目标
 - 不含文件夹（Launchpad 的 folder 归组）与自定义排序，v1 仅平铺网格
 - `make_app.sh` 产出 ad-hoc 签名版，分发需走上方「公证与发布」流程；**ad-hoc 签名每次重建都会变 cdhash，导致已授予的辅助功能权限失效**——需要长期保留授权时应改用 Developer ID 签名
 - 开机自启需在 系统设置 → 通用 → 登录项 中添加（本机已添加）
