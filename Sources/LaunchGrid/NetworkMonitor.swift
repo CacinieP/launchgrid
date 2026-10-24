@@ -115,6 +115,8 @@ final class NetworkMonitor: ObservableObject {
     private var rateBaseline: (rx: UInt64, tx: UInt64, uptime: UInt64)?
     private var sampleBaseline: (rx: UInt64, tx: UInt64, uptime: UInt64)?
     private let baselineLock = NSLock()
+    private var active = false
+    private var generation: UInt64 = 0
 
     // 按天累计的内存缓存（主线程访问）：今日增量在 recordSample 里累加，
     // 过去的天数首次读取文件后缓存，避免周期累计每 5 秒重解析一堆 JSONL
@@ -136,6 +138,14 @@ final class NetworkMonitor: ObservableObject {
 
     /// 只有停在网络页时才轮询
     func setActive(_ active: Bool) {
+        baselineLock.lock()
+        if self.active != active {
+            self.active = active
+            generation &+= 1
+            rateBaseline = nil
+            sampleBaseline = nil
+        }
+        baselineLock.unlock()
         if active {
             refresh()
             startLiveTimer()
@@ -145,7 +155,24 @@ final class NetworkMonitor: ObservableObject {
             liveTimer = nil
             historyTimer?.invalidate()
             historyTimer = nil
+            downloadBPS = 0
+            uploadBPS = 0
+            processTraffic = []
+            connections = []
+            updatedAt = nil
         }
+    }
+
+    private var activeGeneration: UInt64? {
+        baselineLock.lock()
+        defer { baselineLock.unlock() }
+        return active ? generation : nil
+    }
+
+    private func isCurrent(_ token: UInt64) -> Bool {
+        baselineLock.lock()
+        defer { baselineLock.unlock() }
+        return active && generation == token
     }
 
     private func startLiveTimer() {
@@ -169,27 +196,33 @@ final class NetworkMonitor: ObservableObject {
     // MARK: - 实时刷新
 
     func refresh() {
-        guard !isRefreshing else { return }
+        guard !isRefreshing, let token = activeGeneration else { return }
         isRefreshing = true
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            let rate = self.currentRate()
-            DebugLog.log("net refresh down=" + String(Int(rate.down))
-                        + " up=" + String(Int(rate.up)))
-            let traffic = NetworkMonitor.readProcessTraffic()
-            let conns = NetworkMonitor.readConnections()
+            defer { DispatchQueue.main.async { self.isRefreshing = false } }
+            guard self.isCurrent(token) else { return }
+            let rate = self.currentRate(generation: token)
+            var errors: [String] = rate == nil ? ["无法读取默认网卡计数器；速率暂不可用。"] : []
+            DebugLog.log("net refresh down=" + String(Int(rate?.down ?? 0))
+                        + " up=" + String(Int(rate?.up ?? 0)))
+            guard self.isCurrent(token) else { return }
+            let traffic = NetworkMonitor.readProcessTraffic(onError: { errors.append($0) })
+            guard self.isCurrent(token) else { return }
+            let conns = NetworkMonitor.readConnections(onError: { errors.append($0) })
             let online = NetworkMonitor.readReachability()
+            let errorText = errors.isEmpty ? nil : errors.joined(separator: " ")
 
             DispatchQueue.main.async {
-                self.downloadBPS = rate.down
-                self.uploadBPS = rate.up
+                guard self.isCurrent(token) else { return }
+                self.downloadBPS = rate?.down ?? 0
+                self.uploadBPS = rate?.up ?? 0
                 self.processTraffic = traffic
                 self.connections = conns
                 self.isReachable = online
                 self.updatedAt = Date()
-                self.lastError = nil
-                self.isRefreshing = false
+                self.lastError = errorText
             }
         }
     }
@@ -198,34 +231,42 @@ final class NetworkMonitor: ObservableObject {
 
     /// 记一次增量并落盘
     func recordSample() {
-        guard !isRecording else { return }
+        guard !isRecording, let token = activeGeneration else { return }
         isRecording = true
+        let sampleTime = Date()
+        let dayKey = NetworkMonitor.dayKey(sampleTime)
+        let cachedTotal = dayTotals[dayKey]
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            let delta = self.consumeCounterDelta()
+            defer { DispatchQueue.main.async { self.isRecording = false } }
+            guard self.isCurrent(token) else { return }
+            let delta = self.consumeCounterDelta(generation: token)
             guard delta != nil else {
-                DispatchQueue.main.async { self.isRecording = false }
                 return
             }
             let sample = TrafficSample(
-                timestamp: Date(),
+                timestamp: sampleTime,
                 downloadBytes: delta!.downloadBytes,
                 uploadBytes: delta!.uploadBytes
             )
-            NetworkMonitor.appendSample(sample)
+            // A detail sheet can start sampling before the full network page loaded history.
+            let previousTotal = cachedTotal ?? NetworkMonitor.loadDayTotal(sampleTime)
+            // Serialize the final generation check and disk append with deactivation.
+            self.baselineLock.lock()
+            if self.active && self.generation == token { NetworkMonitor.appendSample(sample) }
+            self.baselineLock.unlock()
 
             DispatchQueue.main.async {
+                guard self.isCurrent(token) else { return }
                 self.samples.append(sample)
                 if self.samples.count > 2000 { self.samples.removeFirst(self.samples.count - 2000) }
                 // 把增量累加进缓存，cumulative(for:) 就不必为今日重读文件
-                let key = NetworkMonitor.dayKey(sample.timestamp)
-                var cached = self.dayTotals[key] ?? CumulativeTraffic()
+                var cached = previousTotal
                 cached.downloadBytes += sample.downloadBytes
                 cached.uploadBytes += sample.uploadBytes
-                self.dayTotals[key] = cached
+                self.dayTotals[dayKey] = cached
                 self.updateCumulative()
-                self.isRecording = false
             }
         }
     }
@@ -274,12 +315,13 @@ final class NetworkMonitor: ObservableObject {
     // MARK: - 速率计算
 
     /// 读网卡计数器并做差分
-    private func currentRate() -> (down: Double, up: Double) {
-        let (rx, tx) = NetworkMonitor.readInterfaceBytes()
+    private func currentRate(generation token: UInt64) -> (down: Double, up: Double)? {
+        guard let (rx, tx) = NetworkMonitor.readInterfaceBytes() else { return nil }
         let now = DispatchTime.now().uptimeNanoseconds
 
         baselineLock.lock()
         defer { baselineLock.unlock() }
+        guard active && generation == token else { return (0, 0) }
 
         // 没有基线时返回 0：避免「开机累计字节 ÷ 开机时长」造成 GB/s 尖峰
         guard let base = rateBaseline, now > base.uptime else {
@@ -298,12 +340,13 @@ final class NetworkMonitor: ObservableObject {
     }
 
     /// 取走一次计数器增量（用于历史采样），并推进基线
-    private func consumeCounterDelta() -> CumulativeTraffic? {
-        let (rx, tx) = NetworkMonitor.readInterfaceBytes()
+    private func consumeCounterDelta(generation token: UInt64) -> CumulativeTraffic? {
+        guard let (rx, tx) = NetworkMonitor.readInterfaceBytes() else { return nil }
         let now = DispatchTime.now().uptimeNanoseconds
 
         baselineLock.lock()
         defer { baselineLock.unlock() }
+        guard active && generation == token else { return nil }
 
         guard let base = sampleBaseline, now > base.uptime else {
             sampleBaseline = (rx, tx, now)
@@ -317,12 +360,12 @@ final class NetworkMonitor: ObservableObject {
     }
 
     /// 读默认网卡的累计字节数
-    private static func readInterfaceBytes() -> (rx: UInt64, tx: UInt64) {
-        guard let interface = NetworkTools.defaultInterface() else { return (0, 0) }
+    private static func readInterfaceBytes() -> (rx: UInt64, tx: UInt64)? {
+        guard let interface = NetworkTools.defaultInterface() else { return nil }
         guard let output = try? Shell.check("/usr/sbin/netstat", ["-b", "-I", interface], timeout: 5) else {
-            return (0, 0)
+            return nil
         }
-        return parseInterfaceBytes(output) ?? (0, 0)
+        return parseInterfaceBytes(output)
     }
 
     /// 解析 `netstat -b -I <iface>` 的 Ibytes / Obytes
@@ -357,13 +400,14 @@ final class NetworkMonitor: ObservableObject {
     /// -P 只看进程、-d 增量模式、-j 追加指定列（小写）、-x 原始数字、
     /// -L 2 -s 1 采两次间隔 1 秒 → 第二个采样块就是 1 秒增量。
     /// 不加 -d 的话两个块都是「进程启动至今」的累计值，会被误当速率。
-    static func readProcessTraffic() -> [ProcessTraffic] {
+    static func readProcessTraffic(onError: ((String) -> Void)? = nil) -> [ProcessTraffic] {
         let result = Shell.run(
             "/usr/bin/nettop",
             ["-P", "-d", "-j", "bytes_in,bytes_out", "-x", "-L", "2", "-s", "1"],
             timeout: 12
         )
-        guard result.isSuccess, !result.stdout.isEmpty else { return [] }
+        guard result.isSuccess else { onError?("无法读取按进程流量，可能权限不足或采样超时。"); return [] }
+        guard !result.stdout.isEmpty else { return [] }
 
         // 按 "time," 表头切块，取最后一块（那一块是 1 秒增量）
         var blocks: [[String]] = []
@@ -419,9 +463,9 @@ final class NetworkMonitor: ObservableObject {
     /// 合并反而更脆。
     ///
     /// 代价：看不到其它用户进程的连接（那需要完全磁盘访问权限）。
-    static func readConnections() -> [NetworkConnection] {
+    static func readConnections(onError: ((String) -> Void)? = nil) -> [NetworkConnection] {
         let result = Shell.run("/usr/sbin/lsof", ["-i", "-n", "-P"], timeout: 10)
-        guard result.isSuccess else { return [] }
+        guard result.isSuccess else { onError?("未能读取网络连接，可能没有可见连接、权限不足或命令超时。"); return [] }
 
         // lsof 的 COMMAND 列被截断到 9 个字符，真实名字靠 ps 补
         let nameMap = readProcessNames()
@@ -455,7 +499,7 @@ final class NetworkMonitor: ObservableObject {
             if protocolName == "UDP", local.address == "*", local.port == 0 { continue }
 
             let name = nameMap[pid] ?? unescapeLsofCommand(cols[0])
-            let key = connectionKey(local: local, remote: remote, isIPv6: isIPv6)
+            let key = "\(protocolName):\(pid):" + connectionKey(local: local, remote: remote, isIPv6: isIPv6)
 
             connections.append(NetworkConnection(
                 id: key,
