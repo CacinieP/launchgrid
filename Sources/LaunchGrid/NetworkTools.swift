@@ -861,11 +861,10 @@ enum NetworkTools {
             }
         }
 
-        // 3. ip-api.com
-        for endpoint in ["https://ip-api.com/json/\(ip)", "http://ip-api.com/json/\(ip)"] {
-            guard let json = try? fetchJSON(endpoint, timeout: 10) else { continue }
-            guard (json["status"] as? String) == "success" else { continue }
-            guard let country = json["country"] as? String, !country.isEmpty else { continue }
+        // 3. ip-api.com（免费版 https 常不可用；不再回退明文 http，避免 IP 查询明文外发）
+        if let json = try? fetchJSON("https://ip-api.com/json/\(ip)", timeout: 10) {
+            guard (json["status"] as? String) == "success" else { return ("未知", nil, nil) }
+            guard let country = json["country"] as? String, !country.isEmpty else { return ("未知", nil, nil) }
             let region = json["regionName"] as? String
             let city = json["city"] as? String
             return (country, region, city)

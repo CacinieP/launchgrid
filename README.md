@@ -73,7 +73,7 @@ macOS 26/27 启动台（Launchpad）移除后的自建替代：一个菜单栏�
 **连接**
 
 - 连接明细唯一数据源为 `lsof -i -n -P`：进程名、PID、协议、本地 / 远端地址、连接状态
-- 进程流量表里点行可直接**终止该进程**（复用进程页的终止 / 强杀通路）
+- 进程流量表右键菜单可**终止该进程**（复用进程页的终止 / 强杀通路；不做单击终止，避免刷新重排时误触）
 
 **DNS**
 
@@ -205,6 +205,8 @@ LAUNCHGRID_SHOW_ON_LAUNCH=network /Applications/LaunchGrid.app/Contents/MacOS/La
 ```bash
 LAUNCHGRID_SNAPSHOT_PATH=/tmp/lg.png LAUNCHGRID_SHOW_ON_LAUNCH=network open -a LaunchGrid
 ```
+
+调试日志写入 `/tmp/launchgrid-debug.log`：Debug 构建默认开启；Release 构建默认关闭，需要时用 `defaults write app.caciniep.launchgrid launchgrid.debugLog -bool YES` 打开并重启应用。
 
 完整调试环境变量：
 

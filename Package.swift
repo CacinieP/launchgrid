@@ -12,6 +12,11 @@ let package = Package(
                 .linkedFramework("Cocoa"),
                 .linkedFramework("Carbon"),
             ]
-        )
+        ),
+        .testTarget(
+            name: "LaunchGridTests",
+            dependencies: ["LaunchGrid"],
+            path: "Tests/LaunchGridTests"
+        ),
     ]
 )

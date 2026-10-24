@@ -106,6 +106,10 @@ enum PasteBack {
 
         // 等目标 app 真正成为前台，再发 ⌘V
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            // 前台不是目标就放弃发送：激活慢或用户已切走时，
+            // ⌘V 会把剪贴板内容粘进别的窗口，比不粘更糟
+            guard let front = NSWorkspace.shared.frontmostApplication,
+                  front.processIdentifier == target.processIdentifier else { return }
             sendCommandV()
         }
     }

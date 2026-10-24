@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import SystemConfiguration
 
 /// 周期（今日 / 本周 / 本月）
 enum TrafficPeriod: String, CaseIterable, Identifiable {
@@ -92,6 +93,8 @@ final class NetworkMonitor: ObservableObject {
     @Published private(set) var samples: [TrafficSample] = []
     @Published private(set) var updatedAt: Date?
     @Published private(set) var lastError: String?
+    /// 系统路由视角的连通性（只读标志位，不发包），状态栏绿点用
+    @Published private(set) var isReachable = true
 
     /// 历史采样间隔
     private let historyInterval: TimeInterval = 5
@@ -113,7 +116,8 @@ final class NetworkMonitor: ObservableObject {
     private var sampleBaseline: (rx: UInt64, tx: UInt64, uptime: UInt64)?
     private let baselineLock = NSLock()
 
-    // 历史累计的当日缓存
+    // 按天累计的内存缓存（主线程访问）：今日增量在 recordSample 里累加，
+    // 过去的天数首次读取文件后缓存，避免周期累计每 5 秒重解析一堆 JSONL
     private var dayTotals: [String: CumulativeTraffic] = [:]
 
     // MARK: - 模型
@@ -175,12 +179,14 @@ final class NetworkMonitor: ObservableObject {
                         + " up=" + String(Int(rate.up)))
             let traffic = NetworkMonitor.readProcessTraffic()
             let conns = NetworkMonitor.readConnections()
+            let online = NetworkMonitor.readReachability()
 
             DispatchQueue.main.async {
                 self.downloadBPS = rate.down
                 self.uploadBPS = rate.up
                 self.processTraffic = traffic
                 self.connections = conns
+                self.isReachable = online
                 self.updatedAt = Date()
                 self.lastError = nil
                 self.isRefreshing = false
@@ -212,6 +218,12 @@ final class NetworkMonitor: ObservableObject {
             DispatchQueue.main.async {
                 self.samples.append(sample)
                 if self.samples.count > 2000 { self.samples.removeFirst(self.samples.count - 2000) }
+                // 把增量累加进缓存，cumulative(for:) 就不必为今日重读文件
+                let key = NetworkMonitor.dayKey(sample.timestamp)
+                var cached = self.dayTotals[key] ?? CumulativeTraffic()
+                cached.downloadBytes += sample.downloadBytes
+                cached.uploadBytes += sample.uploadBytes
+                self.dayTotals[key] = cached
                 self.updateCumulative()
                 self.isRecording = false
             }
@@ -240,7 +252,13 @@ final class NetworkMonitor: ObservableObject {
         var day = start
         while day <= now {
             let key = NetworkMonitor.dayKey(day)
-            let value = dayTotals[key] ?? NetworkMonitor.loadDayTotal(day)
+            let value: CumulativeTraffic
+            if let cached = dayTotals[key] {
+                value = cached
+            } else {
+                value = NetworkMonitor.loadDayTotal(day)
+                dayTotals[key] = value
+            }
             total.downloadBytes += value.downloadBytes
             total.uploadBytes += value.uploadBytes
             guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
@@ -300,7 +318,7 @@ final class NetworkMonitor: ObservableObject {
 
     /// 读默认网卡的累计字节数
     private static func readInterfaceBytes() -> (rx: UInt64, tx: UInt64) {
-        guard let interface = defaultInterface() else { return (0, 0) }
+        guard let interface = NetworkTools.defaultInterface() else { return (0, 0) }
         guard let output = try? Shell.check("/usr/sbin/netstat", ["-b", "-I", interface], timeout: 5) else {
             return (0, 0)
         }
@@ -534,36 +552,21 @@ final class NetworkMonitor: ObservableObject {
         return names
     }
 
-    // MARK: - 接口与网关
-
-    /// 默认路由接口（本机是 en1，不能硬编码 en0）
-    static func defaultInterface() -> String? {
-        guard let output = try? Shell.check("/sbin/route", ["-n", "get", "default"], timeout: 5) else {
-            return nil
-        }
-        for line in output.split(separator: "\n").map(String.init) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("interface:") else { continue }
-            let name = trimmed.replacingOccurrences(of: "interface:", with: "")
-                .trimmingCharacters(in: .whitespaces)
-            if !name.isEmpty { return name }
-        }
-        return nil
-    }
-
-    /// 默认网关
-    static func defaultGateway() -> String? {
-        guard let output = try? Shell.check("/usr/sbin/netstat", ["-nr"], timeout: 5) else { return nil }
-        for line in output.split(separator: "\n").map(String.init) {
-            let cols = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-            guard cols.count >= 2, cols[0] == "default" else { continue }
-            var address = cols[1]
-            if let percent = address.firstIndex(of: "%") {
-                address = String(address[address.startIndex ..< percent])
+    /// 读系统路由表对 8.8.8.8 的可达标志位（查询本地状态，不产生网络流量）
+    private static func readReachability() -> Bool {
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        guard inet_pton(AF_INET, "8.8.8.8", &address.sin_addr) == 1 else { return true }
+        var addr = sockaddr()
+        withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { rebound in
+                addr = rebound.pointee
             }
-            if !address.isEmpty { return address }
         }
-        return nil
+        guard let reachability = SCNetworkReachabilityCreateWithAddress(kCFAllocatorDefault, &addr) else { return true }
+        var flags = SCNetworkReachabilityFlags()
+        guard SCNetworkReachabilityGetFlags(reachability, &flags) else { return true }
+        return flags.contains(.reachable) && !flags.contains(.interventionRequired)
     }
 
     // MARK: - 历史落盘
@@ -656,6 +659,8 @@ final class NetworkMonitor: ObservableObject {
                 ))
             }
             DispatchQueue.main.async {
+                // 当日缓存基于启动时的快照累计而来，重读文件后先失效再重建
+                self?.dayTotals.removeValue(forKey: NetworkMonitor.dayKey(Date()))
                 self?.samples = loaded.sorted { $0.timestamp < $1.timestamp }
                 self?.updateCumulative()
             }

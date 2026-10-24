@@ -182,8 +182,9 @@ struct ClipboardContentView: View {
                 PasteBack.openAccessibilitySettings()
             }
             .controlSize(.small)
-            Button("仅复制模式已可用") {
-                trusted = true
+            // 授权是系统设置里的操作，回来后点这里做真实校验，横幅只在校验通过时消失
+            Button("我已授权，重新检测") {
+                trusted = PasteBack.isTrusted
             }
             .controlSize(.small)
             Spacer(minLength: 0)

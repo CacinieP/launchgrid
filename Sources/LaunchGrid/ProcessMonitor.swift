@@ -94,12 +94,19 @@ final class ProcessMonitor: ObservableObject {
     // MARK: - 取数
 
     private static func readSnapshot(applicationPIDs: Set<Int32>) -> [ProcessEntry] {
-        guard let output = runPS() else { return [] }
+        // 全量 ps 输出轻松上百 KB，必须走 Shell 的临时文件读取：
+        // 管道 readDataToEndOfFile 在 macOS 上会截断大输出（见 Shell.run 注释）
+        let result = Shell.run(
+            "/bin/ps",
+            ["-axww", "-o", "pid=,ppid=,user=,%cpu=,%mem=,rss=,state=,comm="],
+            timeout: 10
+        )
+        guard result.isSuccess, !result.stdout.isEmpty else { return [] }
 
-        var result: [ProcessEntry] = []
-        result.reserveCapacity(1024)
+        var resultEntries: [ProcessEntry] = []
+        resultEntries.reserveCapacity(1024)
 
-        for line in output.split(separator: "\n") {
+        for line in result.stdout.split(separator: "\n") {
             // comm 放在最后且路径可能含空格，所以最多切 7 刀，末段保留完整路径
             let fields = line.split(maxSplits: 7,
                                     omittingEmptySubsequences: true,
@@ -109,7 +116,7 @@ final class ProcessMonitor: ObservableObject {
             let pid = Int32(fields[0]) ?? -1
             guard pid > 0 else { continue }
 
-            result.append(ProcessEntry(
+            resultEntries.append(ProcessEntry(
                 pid: pid,
                 ppid: Int32(fields[1]) ?? 0,
                 user: String(fields[2]),
@@ -122,26 +129,7 @@ final class ProcessMonitor: ObservableObject {
                 isApplication: applicationPIDs.contains(pid)
             ))
         }
-        return result
-    }
-
-    private static func runPS() -> String? {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/ps")
-        task.arguments = ["-axww", "-o", "pid=,ppid=,user=,%cpu=,%mem=,rss=,state=,comm="]
-        task.standardError = FileHandle.nullDevice
-
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        do {
-            try task.run()
-        } catch {
-            return nil
-        }
-        // 先读完再 wait，避免管道写满造成死锁
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        task.waitUntilExit()
-        return String(data: data, encoding: .utf8)
+        return resultEntries
     }
 
     // MARK: - 终止
@@ -172,7 +160,7 @@ final class ProcessMonitor: ObservableObject {
             let code = errno
             switch code {
             case EPERM:
-                return "权限不足：无法终止 PID \(pid)（需要管理员权限）"
+                return "权限不足：PID \(pid) 属于其他用户（root 等特权进程暂不支持终止）"
             case ESRCH:
                 return "进程 PID \(pid) 已退出"
             default:

@@ -93,9 +93,9 @@ struct NetworkContentView: View {
         HStack(spacing: 18) {
             HStack(spacing: 6) {
                 Circle()
-                    .fill(Color.green)
+                    .fill(monitor.isReachable ? Color.green : Color.red)
                     .frame(width: 8, height: 8)
-                Text("网络正常")
+                Text(monitor.isReachable ? "网络正常" : "网络不可达")
                     .font(.callout)
             }
 
@@ -200,7 +200,7 @@ struct NetworkContentView: View {
                             .padding(.vertical, 5)
                             .padding(.horizontal, 40)
                             .contentShape(Rectangle())
-                            .onTapGesture { terminate(item) }
+                            // 不做单击终止：列表每 2 秒刷新重排，误点代价太高，终止走右键菜单
                             .contextMenu {
                                 Button("终止该进程") { terminate(item) }
                             }
@@ -306,7 +306,7 @@ struct NetworkContentView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 14) {
-            Text("点流量行可直接终止该进程")
+            Text("右键流量行可终止该进程")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
